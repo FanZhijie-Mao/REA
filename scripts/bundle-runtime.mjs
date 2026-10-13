@@ -1,5 +1,5 @@
 import { parse } from "@babel/parser";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -9,6 +9,26 @@ import { fileURLToPath, pathToFileURL } from "node:url";
  */
 export const bundleRuntime = async (root) => {
   const compiledRoot = resolve(root, "dist");
+  const compiledEntries = [
+    "main.js",
+    "mcpDoctor.js",
+    "cli.js",
+    "cliOutput.js",
+    "cli/cliResultOutput.js",
+  ];
+
+  // Rolldown can emit empty entrypoints under Android/Termux ARM64.
+  // Keep the TypeScript ESM output on Android; the dispatcher supports it.
+  if (
+    process.platform === "android" ||
+    process.env.REA_SKIP_RUNTIME_BUNDLING === "1"
+  ) {
+    await requireNonEmptyFiles(compiledRoot, compiledEntries, "TypeScript");
+    process.stdout.write(
+      "Android detected; skipping Rolldown and keeping compiled runtime modules.\n",
+    );
+    return;
+  }
   // CLI, MCP, workers and updater fixtures share one release-identity owner.
   const metadataModule = join(compiledRoot, "generatedPackageMetadata.js");
   const isMetadataModule = (id) =>
@@ -131,6 +151,43 @@ export const bundleRuntime = async (root) => {
       await bundle.close();
     }
   }
+
+  await requireNonEmptyFiles(
+    compiledRoot,
+    [
+      "mcp/main.js",
+      "cli-runtime/cli.js",
+      "cli-runtime/cliOutput.js",
+      "cli-runtime/cliResultOutput.js",
+      "cli-runtime/mcpDoctor.js",
+    ],
+    "Rolldown",
+  );
+};
+
+const requireNonEmptyFiles = async (root, paths, producer) => {
+  const invalid = [];
+  for (const path of paths) {
+    try {
+      const info = await stat(join(root, path));
+      if (!info.isFile() || info.size === 0) invalid.push(path);
+    } catch (cause) {
+      if (
+        typeof cause === "object" &&
+        cause !== null &&
+        "code" in cause &&
+        cause.code === "ENOENT"
+      ) {
+        invalid.push(path);
+        continue;
+      }
+      throw cause;
+    }
+  }
+  if (invalid.length > 0)
+    throw new Error(
+      `${producer} did not produce non-empty runtime files: ${invalid.join(", ")}`,
+    );
 };
 
 if (
