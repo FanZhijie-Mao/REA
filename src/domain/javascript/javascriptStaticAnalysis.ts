@@ -53,6 +53,7 @@ import {
 
 import { createJavaScriptRpcScan } from "./javascriptRpcEndpoints.js";
 import { semanticImportEqualsSpecifier } from "./javascriptSemanticProjection.js";
+import { classifyParsedJavaScriptViteDependencySpecifiersSteps } from "./javascriptViteDependencies.js";
 import {
   hasUncertainTypeOnlyModuleSideEffect,
   isTypeOnlyExportDeclaration,
@@ -96,6 +97,11 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
     bindings,
   );
   const clientRoots = yield* classifyParsedJavaScriptRpcClientRootsSteps(file);
+  const viteDependencySpecifiers =
+    yield* classifyParsedJavaScriptViteDependencySpecifiersSteps(
+      file,
+      bindings,
+    );
   yield* traverseStaticSourceSteps(
     file,
     {
@@ -103,6 +109,7 @@ export function* analyzeParsedJavaScriptStaticSourceSteps(
       accumulator,
       ...(openReceiverFacts === undefined ? {} : { openReceiverFacts }),
       electronBindings: electronIdentity.bindings,
+      viteDependencySpecifiers,
       rpcScan: createJavaScriptRpcScan(source, clientRoots),
     },
     bindings,
@@ -245,11 +252,10 @@ const inspectNode = (
     inspectBundlerBootstrap(source, node, accumulator, bindings);
     inspectBundlerRegistration(source, node, accumulator, bindings);
     inspectEsbuildWrapper(source, node, accumulator, bindings);
-    inspectCall(source, node, findings, bindings);
+    inspectCall(node, findings, bindings);
   } else if (t.isOptionalCallExpression(node)) {
-    inspectCall(source, node, findings, bindings);
-  } else if (t.isNewExpression(node))
-    inspectCall(source, node, findings, bindings);
+    inspectCall(node, findings, bindings);
+  } else if (t.isNewExpression(node)) inspectCall(node, findings, bindings);
   if (t.isTSImportEqualsDeclaration(node)) {
     const specifier = semanticImportEqualsSpecifier(node);
     if (specifier !== null)

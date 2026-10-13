@@ -241,6 +241,19 @@ while locally shadowed receivers can still contribute network endpoint
 candidates. A template recovered with a parser error and no cooked value stays
 dynamic; its raw spelling is not treated as a valid JavaScript string.
 
+Vite `__vite__mapDeps` dependency tables use decoded JavaScript string values,
+so an escaped path such as `caf\u00e9.js` resolves to `café.js`. array positions
+are preserved when entries are dynamic or missing; a spread of unknown length
+makes subsequent indexes unknown. calls use their own lexical helper binding,
+and unresolved dependencies retain the call expression and source evidence.
+equivalent function/block helpers, including Babel's lowered `arguments`
+defaults, retain the same table interpretation. explicit `undefined` defaults
+are distinguished from overrides; visible or unproven argument effects remain
+unknown. writes through helper/cache aliases and in-place cache mutations make
+dependencies unknown, including mutations of shared cache values in shallow
+copies. replacing a copied container's property leaves the original cache intact.
+chained calls keep the helper invocation's exact source range.
+
 RPC client syntax also contributes network endpoint candidates, in both
 `analyze_javascript_application` and `analyze_web_bundle`, distinguished by
 `mechanism`:

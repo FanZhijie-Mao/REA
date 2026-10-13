@@ -47,7 +47,6 @@ type JavaScriptCallLike =
 
 /** Inspect one call or new expression for references, endpoints, storage, and roles. */
 export const inspectCall = (
-  source: string,
   node: JavaScriptCallLike,
   context: FindingContext,
   bindings: JavaScriptSemanticAnalysisState,
@@ -71,8 +70,11 @@ export const inspectCall = (
       kind: "dynamic-import",
       specifier: chunkLoad.specifier,
     });
-  for (const specifier of vitePreloadDependencySpecifiers(source, node, name))
-    addReference(context, { node, kind: "dynamic-import", specifier });
+  if (t.isCallExpression(node) || t.isOptionalCallExpression(node))
+    for (const specifier of context.viteDependencySpecifiers?.get(node) ?? []) {
+      if (specifier === undefined) accumulator.unknownFindings += 1;
+      addReference(context, { node, kind: "dynamic-import", specifier });
+    }
   const worker = t.isNewExpression(node) ? node : undefined;
   const workerConstructor =
     worker === undefined
@@ -238,31 +240,6 @@ const chunkLoadSpecifier = (
   )
     return null;
   return { specifier: prefixedArgument("chunk:", node.arguments[0]) };
-};
-
-const vitePreloadDependencySpecifiers = (
-  source: string,
-  node: JavaScriptCallLike,
-  name: string,
-): readonly string[] => {
-  if (name !== "__vite__mapDeps" || !t.isArrayExpression(node.arguments[0]))
-    return [];
-  const indexes = node.arguments[0].elements.flatMap((element) =>
-    t.isNumericLiteral(element) ? [element.value] : [],
-  );
-  if (indexes.length !== node.arguments[0].elements.length) return [];
-  const table = vitePreloadDependencyTable(source);
-  return indexes.flatMap((index) => table[index] ?? []);
-};
-
-const vitePreloadDependencyTable = (source: string): readonly string[] => {
-  const match =
-    /\.\s*f\s*\|\|\s*\(\s*[^)]*?\.f\s*=\s*\[([\s\S]*?)\]\s*\)/u.exec(source);
-  const body = match?.[1];
-  if (body === undefined) return [];
-  return [
-    ...body.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'/gu),
-  ].map((literal) => literal[1] ?? literal[2] ?? "");
 };
 
 const inspectEndpointCall = (
