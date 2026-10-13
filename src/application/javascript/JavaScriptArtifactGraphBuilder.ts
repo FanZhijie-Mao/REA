@@ -95,6 +95,11 @@ function* buildJavaScriptArtifactGraphInputSteps(
     snapshot,
     fileSet,
     analysis,
+    directoryPaths: new Set(
+      snapshot.occurrences
+        .filter(({ entry_kind }) => entry_kind === "directory")
+        .map(({ logical_path }) => logical_path),
+    ),
     root,
     filesByPath: new Map(fileSet.files.map((file) => [file.path, file])),
     fileNodes: new Map(),

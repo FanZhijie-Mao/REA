@@ -226,6 +226,32 @@ describe("legacy package main lookup", () => {
     },
   );
 
+  it("retains inventoried directories during legacy ESM main finalization", () => {
+    const files = fileMap([
+      file("app/src/entry.mjs", "root"),
+      file(
+        "app/node_modules/fixture/package.json",
+        "root",
+        '{"main":"./lib/"}',
+      ),
+      file("app/node_modules/fixture/lib.js", "root"),
+    ]);
+    expect(
+      resolve({
+        declaredPath: "fixture",
+        sourcePath: "app/src/entry.mjs",
+        context: "module-specifier",
+        moduleKind: "import",
+        files,
+        directoryPaths: new Set(["app/node_modules/fixture/lib/.js"]),
+      }),
+    ).toMatchObject({
+      resolution_status: "rejected",
+      resolved_path: null,
+      candidate_path: "app/node_modules/fixture/lib/.js",
+    });
+  });
+
   it.each(["import", "require"] as const)(
     "does not recursively resolve a nested package from a %s package main",
     (moduleKind) => {
@@ -2327,3 +2353,27 @@ describe("exact HTML resource resolution", () => {
     });
   });
 });
+
+it.each(["require", "import"] as const)(
+  "rejects a literal trailing backslash package main before %s probing",
+  (moduleKind) => {
+    const files = fileMap([
+      file("entry.js", "root"),
+      file(
+        "node_modules/p/package.json",
+        "root",
+        JSON.stringify({ main: "lib\\" }),
+      ),
+      file("node_modules/p/lib", "root"),
+    ]);
+    expect(
+      resolve({
+        declaredPath: "p",
+        sourcePath: "entry.js",
+        context: "module-specifier",
+        moduleKind,
+        files,
+      }),
+    ).toMatchObject({ resolution_status: "rejected", resolved_path: null });
+  },
+);

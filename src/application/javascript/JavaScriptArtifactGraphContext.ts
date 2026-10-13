@@ -32,6 +32,7 @@ export interface JavaScriptArtifactGraphContext {
   readonly snapshot: ArtifactInventorySnapshot;
   readonly fileSet: JavaScriptArtifactFileSet;
   readonly analysis: JavaScriptModuleArtifactAnalysis;
+  readonly directoryPaths: ReadonlySet<string>;
   readonly root: ApplicationNode;
   readonly filesByPath: ReadonlyMap<string, JavaScriptArtifactFile>;
   readonly fileNodes: Map<string, ApplicationNode>;
@@ -352,12 +353,14 @@ export const resolveArtifactPath = (
   sourcePath: string,
   files: ReadonlyMap<string, JavaScriptArtifactFile>,
   moduleKind?: "import" | "require" | "compiler-dependent",
+  directoryPaths?: ReadonlySet<string>,
 ): string | null =>
   resolveArtifactPathByContext({
     declaredPath: specifier,
     sourcePath,
     context: "module-specifier",
     files,
+    ...(directoryPaths === undefined ? {} : { directoryPaths }),
     ...(moduleKind === undefined ? {} : { moduleKind }),
   }).resolved_path;
 

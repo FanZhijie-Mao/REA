@@ -1,14 +1,12 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import { expect } from "vitest";
 
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
-import { analyzeJavaScriptDirectory } from "../../support/cli/javascriptApplication.js";
+import {
+  analyzeJavaScriptDirectory,
+  runNodeJsonControl,
+} from "../../support/cli/javascriptApplication.js";
 import { writeFixtureFiles } from "../../support/javascriptApplicationFixture.js";
-
-const execute = promisify(execFile);
 
 const createModuleLookupFixture = async () => {
   const root = await createTestTempDirectory("rea-module-lookup-");
@@ -128,19 +126,10 @@ const createModuleLookupFixture = async () => {
   return root;
 };
 
-type RuntimeControlResult = {
-  readonly specifier: string;
-  readonly ok: boolean;
-  readonly code?: string;
-  readonly value?: unknown;
-};
-
 const expectNodeRuntimeControls = (
-  esmOutput: string,
-  cjsOutput: string,
+  esmResults: unknown,
+  cjsResults: unknown,
 ): void => {
-  const esmResults = JSON.parse(esmOutput) as RuntimeControlResult[];
-  const cjsResults = JSON.parse(cjsOutput) as RuntimeControlResult[];
   expect(esmResults).toEqual([
     {
       specifier: "./extensionless",
@@ -237,16 +226,10 @@ cliTest.for(["CLI", "stdio MCP"] as const)(
   async (surface, { cli }) => {
     const root = await createModuleLookupFixture();
     const [esmControl, cjsControl] = await Promise.all([
-      execute(process.execPath, ["esm/runtime-control.mjs"], {
-        cwd: root,
-        timeout: 5_000,
-      }),
-      execute(process.execPath, ["cjs/runtime-control.cjs"], {
-        cwd: root,
-        timeout: 5_000,
-      }),
+      runNodeJsonControl(root, "esm/runtime-control.mjs"),
+      runNodeJsonControl(root, "cjs/runtime-control.cjs"),
     ]);
-    expectNodeRuntimeControls(esmControl.stdout, cjsControl.stdout);
+    expectNodeRuntimeControls(esmControl, cjsControl);
 
     const { graph } = await analyzeJavaScriptDirectory(surface, cli, root);
     const expectations = [
