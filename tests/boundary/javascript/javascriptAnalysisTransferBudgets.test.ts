@@ -9,6 +9,7 @@ import { completeJavaScriptAnalysisSteps } from "../../../src/application/javasc
 import { projectJavaScriptSemanticFileSteps } from "../../../src/application/javascript/JavaScriptSemanticGraphBuilder.js";
 import {
   javaScriptTransferByteBudget,
+  javaScriptTransferRetentionBytes,
   measureJavaScriptModuleTransfer,
   writeJavaScriptAnalysisTransfer,
   readJavaScriptAnalysisTransfer,
@@ -17,8 +18,13 @@ import {
 it("allows larger streamed transfers only with corresponding parent capacity", () => {
   const mib = 1024 * 1024;
   expect(javaScriptTransferByteBudget(0)).toBe(512 * mib);
-  expect(javaScriptTransferByteBudget(4096 * mib)).toBe(512 * mib);
-  expect(javaScriptTransferByteBudget(12288 * mib)).toBe(1536 * mib);
+  expect(javaScriptTransferByteBudget(4096 * mib)).toBe(
+    Math.floor((4096 * mib) / 5),
+  );
+  expect(javaScriptTransferByteBudget(8192 * mib)).toBe(
+    Math.floor((8192 * mib) / 5),
+  );
+  expect(javaScriptTransferByteBudget(12288 * mib)).toBe(2048 * mib);
   expect(javaScriptTransferByteBudget(32768 * mib)).toBe(2048 * mib);
 });
 
@@ -97,4 +103,43 @@ it("enforces the offered complete-file byte budget while preserving authenticate
       2 ** 31 + 1,
     ),
   ).rejects.toBeInstanceOf(RangeError);
+});
+
+it("admits the recorded transfer under the retention policy", () => {
+  // Recorded admission refusal (#1387 follow-up): a single 3.2 MB minified
+  // source produced a 210,238,252-byte / 260,560-record graph transfer with
+  // 1,434,390,040 bytes remaining in the parent budget. The worker and its
+  // transfer fit their own budgets; only the retention estimate refused.
+  const graphBytes = 210_238_252;
+  const graphRecords = 260_560;
+  const moduleBytes = 1_892_116;
+  const moduleRecords = 2_295;
+  const remaining = 1_434_390_040;
+  const moduleEstimate = javaScriptTransferRetentionBytes(
+    moduleBytes,
+    moduleRecords,
+  );
+  const graphEstimate = javaScriptTransferRetentionBytes(
+    graphBytes,
+    graphRecords,
+  );
+  expect(moduleEstimate).toBe(9_607_460);
+  expect(graphEstimate).toBe(1_067_867_100);
+  // This checks admission policy, not a measured memory bound. Completed
+  // process-family measurements live in the transfer-retention experiment.
+  // The previous 8x charge refused this transfer against the same budget.
+  expect(graphEstimate / graphBytes).toBeGreaterThanOrEqual(5);
+  expect(graphEstimate / graphBytes).toBeLessThan(5.5);
+  expect(moduleEstimate + graphEstimate).toBeLessThanOrEqual(remaining);
+  expect(2 * (moduleEstimate + graphEstimate)).toBeGreaterThan(remaining);
+});
+
+it("charges retention monotonically from empty transfers", () => {
+  expect(javaScriptTransferRetentionBytes(0, 0)).toBe(0);
+  expect(javaScriptTransferRetentionBytes(1, 0)).toBe(5 + 64 * 0);
+  expect(javaScriptTransferRetentionBytes(0, 1)).toBe(64);
+  const small = javaScriptTransferRetentionBytes(1024, 10);
+  const large = javaScriptTransferRetentionBytes(2048, 20);
+  expect(large).toBeGreaterThan(small);
+  expect(large).toBe(2 * small);
 });

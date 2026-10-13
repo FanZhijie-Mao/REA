@@ -47,11 +47,28 @@ export const javaScriptAnalysisTransferDescriptorSchema = z.strictObject({
 });
 type Descriptor = z.output<typeof javaScriptAnalysisTransferDescriptorSchema>;
 
-/** Conservative retained-object and sealing expansion for validated transfer rows. */
+/**
+ * Retained-object expansion for validated transfer rows, including the
+ * seal-time duplicate representation.
+ *
+ * This is a heuristic admission charge, not a hard process-family memory
+ * bound. Sealing clones parsed elements while the transferred collections
+ * remain live; the reusable producer can also remain alive during adoption.
+ * The parent result budget separately reserves half its available heap for
+ * control/transients and 24 maximum-size records for decoding. Worker heap
+ * limits are independent of this parent charge.
+ *
+ * Completed CLI process-family comparisons, record mixes and limitations:
+ * experiments/analysis-efficiency/javascript-transfer-retention.md. Keep the
+ * stream cap and admission charge on this same multiplier. Arithmetic tests
+ * verify that policy; they do not calibrate its memory expansion.
+ */
+const TRANSFER_RETENTION_MULTIPLIER = 5;
+
 export const javaScriptTransferRetentionBytes = (
   bytes: number,
   records: number,
-): number => bytes * 8 + records * 64;
+): number => bytes * TRANSFER_RETENTION_MULTIPLIER + records * 64;
 
 /** Larger streamed files require corresponding parent admission capacity. */
 export const javaScriptTransferByteBudget = (
@@ -59,7 +76,10 @@ export const javaScriptTransferByteBudget = (
 ): number =>
   Math.min(
     MAX_TRANSFER_BYTES,
-    Math.max(TRANSFER_BYTES, Math.floor(resultBudgetBytes / 8)),
+    Math.max(
+      TRANSFER_BYTES,
+      Math.floor(resultBudgetBytes / TRANSFER_RETENTION_MULTIPLIER),
+    ),
   );
 
 const assertTransferByteBudget = (transferBytes: number): void => {

@@ -496,8 +496,12 @@ While sources remain, the sequential worker reserves one next compact static
 checkpoint at its 8 MiB bound with the same 6x retention expansion used at
 admission. Earlier checkpoints are already charged to retained bytes; the
 remaining inventory does not multiply the reserve. Streamed file transfers keep the default 512 MiB
-allowance, and can grow with the parent's offered retention budget (8x byte
-expansion), up to 2 GiB. Individual records remain bounded to 8 MiB. The parent
+allowance, and can grow with the parent's offered retention budget (5x byte
+expansion), up to 2 GiB. Admission charges 5 times the actual transfer bytes
+plus 64 bytes per record, including an allowance for overlapping collections
+during sealing. This is a retention estimate, not a process-family memory cap;
+the reusable analyzer can remain alive while the parent adopts its results.
+Individual records remain bounded to 8 MiB. The parent
 still independently checks actual bytes, record overhead, digests and source
 identities before adopting results.
 
