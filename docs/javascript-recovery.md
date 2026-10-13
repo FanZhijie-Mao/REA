@@ -47,6 +47,65 @@ export REA_WAKARU_COMMAND="$(realpath node_modules/@wakaru/cli-linux-x64/wakaru)
 Both give the same binary (SHA-256
 `664fa06782a61eda7ed15885134b52525fd565dd77607e642062ceb6cd927c38`).
 
+### jsbeautify
+
+The jsbeautify adapter remains unverified against the real executable. Current
+coverage uses controlled stand-ins; the existing real CLI/MCP lane covers only
+Wakaru. The jsbeautify version banner, rewrite arguments, and stderr re-parse
+phase gates require real-binary CLI/MCP qualification before compatibility can
+be claimed. No such provider run was performed for this revision.
+
+`engine: "jsbeautify"` (CLI `--engine jsbeautify`) uses a caller-supplied
+[jsbeautify](https://github.com/coleleavitt/jsbeautify) binary on Linux
+(any architecture). Set `REA_JSBEAUTIFY_COMMAND` to its absolute path; util-linux
+`prlimit` is required as for Wakaru. REA neither installs nor pins it: the
+result reports the executable's path, SHA-256, size and the version parsed from
+`jsbeautify --version`. `audited_source_revision` is `null`: REA has audited no
+jsbeautify source, and a version banner cannot prove which source produced the
+binary.
+
+jsbeautify rewrites each selected file whole. Modules are not split, so
+`extraction_mode` must stay `structural` and each module's byte range is its
+whole input. `rewrite_level` selects the rewrite:
+
+| `rewrite_level` | jsbeautify arguments | Effect                                   |
+| --------------- | -------------------- | ---------------------------------------- |
+| `minimal`       | none                 | Formatting only                          |
+| `standard`      | `--deobfuscate`      | The multi-phase deobfuscation pipeline   |
+| `aggressive`    | `--rename-vars`      | Deobfuscation plus heuristic local names |
+
+`.cjs` inputs are parsed as CommonJS and `.mjs` inputs as modules; other
+classic scripts keep their top-level names. A file is published only when
+jsbeautify exits 0 and, when deobfuscating, its stderr reports both generated
+output re-parse checks (phases 19.6 and 21.5); otherwise the file is listed in
+`warnings` with kind `validity-gate` and the status is `partial`. Re-parsing
+proves syntax, not behaviour. When a renamed input would take another selected
+input's name (for example `bundle` and `bundle.js`), it is published under
+`__rea_recovered_<n>_<k>/` and listed in `warnings` with kind `module-alias`;
+`analysis_input` is then `null`, because relative imports of and from that
+module would resolve to different files than in the original layout. The same
+applies when one of several selected inputs is published as `__rea_<digest>.js`
+because its name with `.js` would exceed 255 bytes. `reports/phases.log` keeps any stderr of
+`jsbeautify --version`, the phase summary per file, or the complete stderr and
+stdout of a file that failed the gate; `reports/provenance.json` keeps the selected resource
+limiter, the exact arguments and gate verdicts. Inline Evidence keeps only the parsed version.
+
+Builds of jsbeautify before `9949993` reserve a worker stack of
+2 KiB per input byte regardless of address-space limits (a 2.4 MB esbuild
+bundle peaks at 0.33 GB RSS but aborts below 3 GiB); later builds cap the stack
+at a quarter of the limit. This engine runs under an 8 GiB address-space
+ceiling per process, a 300-second operation deadline, 256 MiB of output and 64 MiB per
+diagnostic stream. `detected_formats` lists the bundlers and obfuscators the
+phase log's `<name> check: detected` lines report (esbuild, Bun, webpack,
+Turbopack, Akamai BMP, Angular).
+
+```sh
+export REA_JSBEAUTIFY_COMMAND="$(command -v jsbeautify)"
+rea recover-javascript-sources /tmp/app/dist/main.cjs /tmp/recovered-main \
+  --engine jsbeautify --additional-path /tmp/app/dist/preload.cjs --json
+rea analyze-javascript-application /tmp/recovered-main/modules --json
+```
+
 ## Recover and analyze
 
 ```sh
@@ -129,12 +188,14 @@ equivalence remain unknown. No network fetching occurs.
 
 ## Resource policy and verification
 
-Each operation uses one worker, a 1 GiB address-space ceiling and a 120-second
-deadline; it accepts up to 64 MiB of total input across all selected files and
+Each Wakaru operation uses one worker, a 1 GiB address-space ceiling per process
+and a 120-second deadline; it accepts up to 64 MiB of total input across all selected files and
 128 MiB/10000 entries of staged
 output, with 8 MiB per diagnostic/report stream. Exceeding a limit is an explicit
 failure with rollback. These limits apply per operation and do not claim aggregate
-host containment across concurrent callers.
+host containment across concurrent callers. The `prlimit` address-space ceiling
+applies to each process separately, including helpers an engine starts; it is
+not an aggregate memory quota.
 
 See [testing.md](testing.md#javascript-source-recovery) for the focused real
 Wakaru CLI/MCP lane and its source-owned compiler fixtures. Other host platforms

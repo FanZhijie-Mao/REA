@@ -3,7 +3,9 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { expect, it, onTestFinished } from "vitest";
+import { createJavaScriptRecoveryProvider } from "../../../src/composition/javascriptRecovery.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
+import { expandToolAvailability } from "../../../src/contracts/toolOutputSchemaPrimitives.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
@@ -81,5 +83,57 @@ it
     });
     expect(session.evidenceById(evidence.evidence_id)).toEqual(evidence);
     await assertRecoveryCleanup(fixture.launches);
+  },
+);
+
+it.skipIf(process.platform !== "linux" || process.arch !== "x64").each([
+  {
+    configured: "REA_JSBEAUTIFY_COMMAND",
+    wakaru: false,
+    jsbeautify: true,
+  },
+  { configured: "REA_WAKARU_COMMAND", wakaru: true, jsbeautify: false },
+])(
+  "reports only the engines an injected provider configures ($configured)",
+  async ({ configured, wakaru, jsbeautify }) => {
+    const session = createTestBinarySession(() => {
+      throw new Error("no binary provider should start");
+    });
+    const server = createServer(
+      { kind: "session", session },
+      {
+        environment: {},
+        javascriptRecovery: createJavaScriptRecoveryProvider({
+          [configured]: "/configured/engine",
+        }),
+      },
+    );
+    const client = new Client({ name: "recovery-availability", version: "1" });
+    onTestFinished(async () => {
+      await client.close();
+      await server.close();
+      await session.close();
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const status = await client.callTool({
+      name: "binary_session",
+      arguments: {},
+    });
+    const recovery = expandToolAvailability(
+      toolContract("binary_session").outputSchema.parse(
+        status.structuredContent,
+      ).result.tool_availability,
+    ).find((tool) => tool.name === "recover_javascript_sources");
+    expect(recovery).toMatchObject({
+      available: true,
+      default_mode_available: wakaru,
+      modes: [
+        { name: "wakaru", available: wakaru },
+        { name: "jsbeautify", available: jsbeautify },
+      ],
+    });
   },
 );

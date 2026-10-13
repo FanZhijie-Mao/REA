@@ -13,7 +13,7 @@ const recoveryResult = (): JavaScriptRecoveryResult => ({
     published_copy: artifact,
   },
   engine: {
-    id: "fixture-recovery",
+    id: "wakaru",
     version: "1",
     executable: artifact,
     audited_source_revision: "pinned",
@@ -37,7 +37,7 @@ const recoveryResult = (): JavaScriptRecoveryResult => ({
   limitations: ["Not executed"],
 });
 const providerIdentity = {
-  id: "fixture-recovery",
+  id: "wakaru",
   name: "Fixture recovery",
   version: "1",
 };
@@ -60,6 +60,7 @@ describe("JavaScript recovery workflow", () => {
     "missing-subject",
     "subject-mismatch",
     "engine-mismatch",
+    "selected-engine-mismatch",
   ])("rejects %s returned across the port", async (mode) => {
     const service = new JavaScriptRecoveryService({
       recover: async () =>
@@ -82,7 +83,11 @@ describe("JavaScript recovery workflow", () => {
           ),
         ),
     });
-    const result = await service.recover(input);
+    const result = await service.recover(
+      mode === "selected-engine-mismatch"
+        ? { ...input, engine: "jsbeautify" }
+        : input,
+    );
     if (result.ok) throw new Error("expected invalid port output");
     expect(result.error._tag).toBe("AnalysisOutputError");
   });

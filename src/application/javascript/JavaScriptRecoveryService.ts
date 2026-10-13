@@ -98,6 +98,7 @@ export class JavaScriptRecoveryService {
       ) ||
       execution.value.subject.path !== result.data.source.path ||
       execution.value.subject.sha256 !== result.data.source.sha256 ||
+      result.data.engine.id !== parsed.data.engine ||
       execution.value.provider.id !== result.data.engine.id ||
       execution.value.provider.version !== result.data.engine.version
     )
