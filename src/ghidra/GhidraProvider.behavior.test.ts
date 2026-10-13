@@ -439,12 +439,13 @@ describe("Ghidra platform support", () => {
       status: "unsupported",
       code: "target_format_unsupported",
     });
+    // ARM64 PE is admitted on Windows P0 (bounded; see docs/windows-ghidra-p0.md).
     expect(
-      ghidra.inspectTargetSupport(executableTarget("pe", "arm64")),
-    ).toMatchObject({
-      status: "unsupported",
-      code: "architecture_unsupported",
-    });
+      ghidra.inspectTargetSupport(executableTarget("pe", "arm64")).status,
+    ).toBe("supported");
+    expect(
+      ghidra.inspectTargetSupport(executableTarget("pe", "arm")).status,
+    ).toBe("supported");
   });
 });
 
@@ -455,12 +456,18 @@ describe("Ghidra Windows PE fixture admission", () => {
       join(root, "scripts/create-ghidra-windows-fixture.mjs"),
     ]);
     const ghidra = provider({ ...installationHost(), platform: "win32" });
-    for (const architecture of ["x86", "x86_64"] as const) {
+    for (const architecture of ["x86", "x86_64", "arm64"] as const) {
       for (const dll of [false, true]) {
+        const suffix =
+          architecture === "x86"
+            ? "-x86"
+            : architecture === "arm64"
+              ? "-arm64"
+              : "";
         const path = join(
           root,
           "build/fixtures",
-          `rea-ghidra-windows${architecture === "x86" ? "-x86" : ""}.${dll ? "dll" : "exe"}`,
+          `rea-ghidra-windows${suffix}.${dll ? "dll" : "exe"}`,
         );
         const bytes = await readFile(path);
         const metadata = parseExecutableHeader(bytes, "x64");
@@ -490,12 +497,22 @@ describe("Ghidra Windows PE fixture admission", () => {
             "target_role_unsupported",
           ],
           [{ ...target, managed: true }, "managed_target_unsupported"],
-          [{ ...target, architecture: "arm64" }, "architecture_unsupported"],
         ] as const) {
           expect(ghidra.inspectTargetSupport(candidate)).toMatchObject({
             status: "unsupported",
             code,
           });
+        }
+        // ARM and ARM64 PE are admitted on Windows P0 (bounded; see
+        // docs/windows-ghidra-p0.md). Real-provider verification uses
+        // handcrafted ARM64 PE fixtures via
+        // `npm run verify:ghidra:windows -- --arm64`.
+        // Compiler-produced coverage remains pending.
+        for (const arch of ["arm", "arm64"] as const) {
+          expect(
+            ghidra.inspectTargetSupport({ ...target, architecture: arch })
+              .status,
+          ).toBe("supported");
         }
       }
     }

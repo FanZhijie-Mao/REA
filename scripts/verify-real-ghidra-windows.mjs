@@ -20,7 +20,10 @@ import { inspectGhidraInstallation } from "../dist/ghidra/GhidraInstallation.js"
 import { SUPPORTED_GHIDRA_VERSION } from "../dist/ghidra/GhidraInstallationPolicy.js";
 import { GhidraHeadlessLauncher } from "../dist/ghidra/GhidraLauncher.js";
 import { GHIDRA_PROVIDER_IDENTITY } from "../dist/ghidra/GhidraProviderCapabilities.js";
-import { windowsP0Capabilities } from "../dist/ghidra/GhidraProviderCapabilities.js";
+import {
+  WINDOWS_P0_NATIVE_PE_ARCHITECTURES,
+  windowsP0Capabilities,
+} from "../dist/ghidra/GhidraProviderCapabilities.js";
 import {
   GHIDRA_MUTATING_OPERATIONS,
   GHIDRA_SESSION_CAPABILITIES,
@@ -67,14 +70,22 @@ if (
   );
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const architecture = process.argv.includes("--x86") ? "x86" : "x86_64";
+if (process.argv.includes("--x86") && process.argv.includes("--arm64"))
+  throw new Error("Choose either --x86 or --arm64, not both.");
+const architecture = process.argv.includes("--x86")
+  ? "x86"
+  : process.argv.includes("--arm64")
+    ? "arm64"
+    : "x86_64";
 const dllFixture = process.argv.includes("--dll");
 const role = dllFixture ? "shared-library" : "application";
 const targetPath = resolve(
   root,
   "build",
   "fixtures",
-  `rea-ghidra-windows${architecture === "x86" ? "-x86" : ""}.${dllFixture ? "dll" : "exe"}`,
+  `rea-ghidra-windows${
+    architecture === "x86" ? "-x86" : architecture === "arm64" ? "-arm64" : ""
+  }.${dllFixture ? "dll" : "exe"}`,
 );
 const target = await parseBinaryTarget(targetPath);
 if (
@@ -129,7 +140,12 @@ try {
     target.value.sha256,
     profile.value.profile.digest,
   );
-  const languagePrefix = architecture === "x86" ? "x86:LE:32:" : "x86:LE:64:";
+  const languagePrefix =
+    architecture === "x86"
+      ? "x86:LE:32:"
+      : architecture === "arm64"
+        ? "AARCH64:LE:64:"
+        : "x86:LE:64:";
   if (!started.value.target.language_id.startsWith(languagePrefix))
     throw new Error("Windows fixture imported with the wrong Ghidra language");
   coordinates = client.diagnostics();
@@ -156,7 +172,12 @@ try {
   );
   if (procedure === undefined)
     throw new Error("Windows Ghidra fixture exposed no local procedure");
-  const calleeAddress = architecture === "x86" ? 0x401010n : 0x140001010n;
+  const calleeAddress =
+    architecture === "x86"
+      ? 0x401010n
+      : architecture === "arm64"
+        ? 0x140001020n
+        : 0x140001010n;
   const callee = procedures.find(
     (item) => BigInt(item.address) === calleeAddress,
   );
@@ -252,12 +273,16 @@ try {
 
   // The reference controls occupy the EXE fixture's additional function.
   // DLL fixtures retain their independent exported-caller/return controls.
-  const compactReferences = dllFixture
-    ? null
-    : await verifyGhidraCompactReferences(
-        functionOperation,
-        architecture === "x86",
-      );
+  // ARM64 fixtures verify function entry, decompiler readback and the
+  // exported caller/callee relationship; the x86/x64 compact-reference
+  // value-flow battery has no ARM64 instruction encoding in this fixture.
+  const compactReferences =
+    dllFixture || architecture === "arm64"
+      ? null
+      : await verifyGhidraCompactReferences(
+          functionOperation,
+          architecture === "x86",
+        );
   report = {
     ok: true,
     provider: { id: "ghidra", version: SUPPORTED_GHIDRA_VERSION },
@@ -278,10 +303,11 @@ try {
       protected_dacl: true,
       handle_admission: true,
     },
+    supported_target_architectures: [...WINDOWS_P0_NATIVE_PE_ARCHITECTURES],
     limitations: [
       "approved-non-sensitive-fixtures-only",
       "windows-x64-local-ntfs-only",
-      "native-x86-and-x86-64-pe-applications-and-dlls-only",
+      "native-pe-applications-and-dlls-only",
       "no-gui-or-mutation-authority",
     ],
   };
@@ -304,7 +330,11 @@ if (report === undefined)
 report.file_offsets = await verifyGhidraFileOffsets(
   targetPath,
   resolve(root, "scripts", "rea.mjs"),
-  architecture === "x86" ? "0x401010" : "0x140001010",
+  architecture === "x86"
+    ? "0x401010"
+    : architecture === "arm64"
+      ? "0x140001020"
+      : "0x140001010",
 );
 process.stdout.write(
   `${JSON.stringify({ verifier_run: await completeVerifierRun(verifierRun), ...report })}\n`,

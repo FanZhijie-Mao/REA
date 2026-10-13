@@ -49,6 +49,7 @@ import {
   CAPABILITIES,
   windowsP0Capabilities,
   GHIDRA_PROVIDER_IDENTITY,
+  WINDOWS_P0_NATIVE_PE_ARCHITECTURES,
 } from "./GhidraProviderCapabilities.js";
 import {
   createGhidraProviderClient,
@@ -316,11 +317,12 @@ const inspectWindowsP0TargetSupport = (
         "Windows Ghidra P0 accepts native PE and explicitly selected raw 6502 targets only.",
       diagnostics,
     };
-  if (target.architecture !== "x86" && target.architecture !== "x86_64")
+  if (!WINDOWS_P0_NATIVE_PE_ARCHITECTURES.includes(target.architecture))
     return {
       status: "unsupported",
       code: "architecture_unsupported",
-      reason: "Windows Ghidra P0 accepts x86 and x86-64 PE targets only.",
+      reason:
+        "Windows Ghidra P0 accepts x86, x86-64, ARM and ARM64 PE targets only.",
       diagnostics,
     };
   if (
