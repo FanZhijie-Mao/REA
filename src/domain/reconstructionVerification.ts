@@ -10,7 +10,10 @@ import { compareUnicodeCodePoints } from "./unicodeCodePointOrder.js";
 import { comparisonSourceEvidenceSides } from "./comparisonSourceEvidence.js";
 import { parseEvidence, type Evidence } from "./evidence.js";
 import { parseEvidenceBundle } from "./evidenceBundle.js";
-import { functionComparisonResultSchema } from "./functionComparisonSchemas.js";
+import {
+  functionComparisonResultSchema,
+  isNormalizedViewDimension,
+} from "./functionComparisonSchemas.js";
 import {
   PROCESS_PROVIDER,
   isProcessEvidenceProvider,
@@ -144,8 +147,7 @@ const evaluateClaim = (
     return source;
   });
   const functionSourceFacts = readValidatedSourceFacts(claim, sources);
-  const observation = comparisonObservation(claim, comparison);
-  const observed = observation.status;
+  const observation = observedStatus(claim, comparison);
   const limitations = [
     ...authorityLimitations(claim, sources, sides),
     ...sourceCallCoverageLimitations(
@@ -161,14 +163,14 @@ const evaluateClaim = (
     claim.dimension,
   );
   const relevantUnknowns = relatedUnknowns;
-  const status = classify(observed, limitations, relevantUnknowns);
+  const status = classify(observation.status, limitations, relevantUnknowns);
   const displayedUnknowns = relevantUnknowns;
   return reconstructionClaimResultSchema.parse({
     claim_id: claim.claim_id,
     kind: claim.kind,
     dimension: claim.dimension,
     status,
-    observed_status: observed,
+    observed_status: observation.status,
     comparison_evidence_id: comparison.evidence_id,
     left_evidence_ids: sides.left,
     right_evidence_ids: sides.right,
@@ -176,6 +178,7 @@ const evaluateClaim = (
     unknown_ids: displayedUnknowns.map(({ unknown_id: id }) => id),
     limitations: uniqueSorted([
       ...comparison.limitations,
+      ...observation.limitations,
       ...limitations,
       ...displayedUnknowns.map(
         ({ question }) => `Residual unknown: ${question}`,
@@ -240,11 +243,12 @@ const validateComparisonIdentity = (claim: Claim, evidence: Evidence): void => {
     throw new TypeError("Comparison Evidence identity or authority disagrees");
 };
 
-const comparisonObservation = (
+const observedStatus = (
   claim: Claim,
   evidence: Evidence,
 ): {
   readonly status: ObservedStatus;
+  readonly limitations: readonly string[];
   readonly hasIndependentFunctionChange?: boolean;
 } => {
   if (claim.kind === "behavioral") {
@@ -255,6 +259,7 @@ const comparisonObservation = (
     return {
       status:
         claim.dimension === "overall" ? result.status : result[claim.dimension],
+      limitations: [],
     };
   }
   if (claim.kind === "structural-function") {
@@ -264,7 +269,9 @@ const comparisonObservation = (
     if (claim.dimension === "overall")
       return {
         status: result.status,
-        // Historical overall changes may come solely from incomplete call sets.
+        limitations: [],
+        // Overall changes may come only from incomplete call sets. Keep
+        // main's call-coverage rule while normalized views are added below.
         hasIndependentFunctionChange:
           result.function_match.status === "mismatched" ||
           (result.function_match.status === "matched" &&
@@ -274,20 +281,23 @@ const comparisonObservation = (
                 dimension.status === "changed",
             )),
       };
-    const dimension = result.dimensions.find(
-      (item) => item.dimension === claim.dimension,
-    );
-    if (dimension === undefined)
-      throw new TypeError("Function comparison dimension missing");
-    if (
-      dimension.evidence_links.some(
-        (id) => !evidence.evidence_links.includes(id),
-      )
-    )
+    const normalized = isNormalizedViewDimension(claim.dimension);
+    const view = normalized
+      ? result.normalized_views?.views.find(
+          (item) => item.dimension === claim.dimension,
+        )
+      : result.dimensions.find((item) => item.dimension === claim.dimension);
+    if (view === undefined)
+      throw new TypeError(
+        normalized
+          ? "Function comparison normalized view was not requested"
+          : "Function comparison dimension missing",
+      );
+    if (view.evidence_links.some((id) => !evidence.evidence_links.includes(id)))
       throw new TypeError(
         "Function dimension cites Evidence outside comparison closure",
       );
-    return { status: dimension.status };
+    return { status: view.status, limitations: view.limitations };
   }
   const result = artifactComparisonResultSchema.parse(
     evidence.normalized_result,
@@ -300,7 +310,7 @@ const comparisonObservation = (
     throw new TypeError(
       "Artifact change cites Evidence outside comparison closure",
     );
-  return { status: result.status };
+  return { status: result.status, limitations: [] };
 };
 
 const validateProcessStatus = (

@@ -21,6 +21,17 @@ directly to `compare_functions`, and `inspect_artifact` Evidence to
 `compare_artifacts`. Use `get_evidence_bundle` when the task needs broader
 retained session history or an explicit bundle for transfer.
 
+`compare_functions` keeps its eight exact dimensions and summary statuses
+unchanged. Set `include_normalized_views: true` to add separate normalized
+pseudocode and assembly views. These views preserve literals and comments,
+replace recognized address-derived identifiers and evidence-supported address
+operands, and retain exact function-relative offsets. Constants and ambiguous
+operands stay visible. An `unchanged` result means the masked text matches; it
+does not establish callee identity or call order. A view is `unknown` when the
+exact calls dimension is unknown and its text masks a callee or thunk target.
+Each view returns its applied masking rules, counts, limitations, and both
+source Evidence links.
+
 Function dossiers can declare per-facet coverage in the optional
 `normalized_result.facet_availability` map. Each supplied facet is either
 `{ "available": true }` or `{ "available": false, "reason": "..." }`.
