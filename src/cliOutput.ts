@@ -111,9 +111,31 @@ const hasUnclosedFilterSlice = (expression: string): boolean => {
 export const validateCliOutputArguments = (
   arguments_: readonly string[],
 ): CliOutputArgumentValidation => {
-  const { filterOutput, format, parseError, tokenWindow } =
-    parseCliOutputArguments(arguments_);
+  const {
+    filterOutput,
+    format,
+    parseError,
+    tokenWindow,
+    tokenCount,
+    fullOutput,
+  } = parseCliOutputArguments(arguments_);
   if (parseError) return { ok: true };
+  if (
+    arguments_[0] === "batch" &&
+    (filterOutput !== undefined ||
+      tokenWindow ||
+      tokenCount ||
+      fullOutput ||
+      arguments_.includes("--quiet") ||
+      (format !== "toon" && format !== "jsonl"))
+  )
+    return {
+      ok: false,
+      format: "jsonl",
+      code: "UNSUPPORTED_OUTPUT_COMBINATION",
+      message:
+        "Batch emits complete per-call JSONL or --out files. Remove human output, filtering, token and full-output controls; project the saved results separately.",
+    };
   if (filterOutput !== undefined && hasUnclosedFilterSlice(filterOutput))
     return {
       ok: false,

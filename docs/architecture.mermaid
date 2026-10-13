@@ -1,6 +1,6 @@
 graph TD
     subgraph "Entry Points"
-        CLI["src/cli.ts + src/cli/<br/>One-shot CLI adapter<br/>setup, diagnostics, analysis, decompilation"]
+        CLI["src/cli.ts + src/cli/<br/>CLI adapter and ordered batch calls<br/>setup, diagnostics, analysis, decompilation"]
         MAIN["src/main.ts + src/main/<br/>MCP stdio server adapter<br/>config, session, process lifetime"]
         DISPATCH["scripts/rea.mjs<br/>Executable dispatcher<br/>routes mcp / one-shot"]
     end

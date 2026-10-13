@@ -1,4 +1,5 @@
 import { registerCaptureCommands } from "./cli/captureCommands.js";
+import { registerBatchCommands } from "./cli/batchCommands.js";
 import { registerSignalCommands } from "./cli/signalCommands.js";
 import { registerWasmCommands } from "./cli/wasmCommands.js";
 import { snapshotEnvironment } from "./process/snapshotEnvironment.js";
@@ -97,6 +98,7 @@ export const createCli = (
   });
 
   registerSetupCommands(cli, logger, environment);
+  registerBatchCommands(cli, logger, environment);
   registerReverseEngineeringCommands(cli, logger, environment);
   registerCutterCommands(cli, logger, environment);
   registerCoreAnalysisCommands(cli, logger, analysis.runDirectAnalysis);

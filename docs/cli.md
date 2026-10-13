@@ -4,6 +4,84 @@ Use the CLI for a direct inspection or a script. It uses the same application
 workflows and evidence contracts as REA's MCP server. Each CLI invocation is a
 separate process; save results when you want to use them in a later command.
 
+## Batch calls in one session
+
+Use `rea batch calls.json` to run several MCP tool calls in one provider session.
+The input is an ordered JSON array with unique string or integer IDs:
+
+```json
+[
+  {
+    "id": "open",
+    "tool": "open_binary",
+    "arguments": {
+      "path": "/absolute/path/program.exe",
+      "provider_id": "ghidra"
+    }
+  },
+  {
+    "id": "info",
+    "tool": "procedure_info",
+    "arguments": { "procedure": "0x401000" }
+  },
+  {
+    "id": "code",
+    "tool": "analyze_function",
+    "arguments": { "procedure": "0x401000" }
+  }
+]
+```
+
+Names and argument schemas are the existing MCP contracts. Opening the target
+once amortizes import and analysis across later queries; no MCP client script or
+agent registration is needed. Calls execute sequentially and each result is
+written before the next call starts. Tool effects and target-selection checks
+remain unchanged: batch is a dispatcher, not an additional execution interface.
+
+```bash
+rea batch calls.json > results.jsonl
+cat calls.json | rea batch - --continue > results.jsonl
+rea batch queries.json --target /absolute/path/program.exe --provider ghidra --out results
+rea batch calls.json --snapshot /absolute/path/analysis.json > results.jsonl
+```
+
+`--target` prepends an `open_binary` call with ID `batch-open`, which must not
+collide with an input ID. Otherwise open the target in the call list. `--provider`
+sets the default provider, while an explicit call's `provider_id` retains priority.
+The active target stays open until a call closes/switches it or the batch finishes.
+
+Stdout contains one JSONL record per completed call: `id`, `tool`, `status`
+(`ok` or `error`), `duration_ms`, and `result`. Structured successes contain the
+canonical Evidence/result once, with MCP delivery/provenance hints in `_meta`.
+This avoids repeating the same JSON as both text and structured content.
+Content-only successes and tool failures retain their complete MCP result.
+A protocol or
+local execution failure instead includes `error`. Tool failures preserve their
+original content, typed diagnostics and provenance. `--jsonl` explicitly selects
+the default; `--format jsonl` also works. Batch does not apply human output,
+filtering, token-window or full-output controls. Project saved results separately.
+
+`--out DIR` writes `DIR/<id>.json` exclusively. File IDs use the portable ASCII
+filename characters (letters, digits, `.`, `_`, `-`), without a trailing dot or
+a Windows device name, and must fit the 255-byte filename component limit.
+IDs must be
+unique even on case-insensitive filesystems. Existing result files cause failure
+before any provider is acquired, and publication never overwrites them. JSONL
+output permits IDs that are not valid filenames. `--out` and `--jsonl` conflict.
+
+The default and `--stop-on-error` stop after the first failed call. `--continue`
+runs subsequent calls and still exits 1 if any failed; selecting both policies
+is invalid. Interrupted batches settle active provider work and close resources,
+exiting 130 for SIGINT or 143 for SIGTERM. Completed results remain available.
+Input/setup, output-publication, snapshot and cleanup failures emit an additional
+control error with `id: null` and `tool: "batch"`; they stop the batch.
+
+`--snapshot PATH` saves the canonical analysis snapshot without overwriting an
+existing file before close. Use the current snapshot workflow to reopen it;
+this does not preserve an engine process between CLI invocations. The default
+per-call timeout covers the configured Ghidra/Hopper startup budgets;
+`--timeout-ms` selects an explicit timeout for longer or shorter calls.
+
 ## Run a command
 
 After [installing REA](installation.md), use `rea`. You can also run a command
