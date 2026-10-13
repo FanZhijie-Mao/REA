@@ -10,6 +10,8 @@ import type {
   ProviderIdentity,
 } from "../AnalysisProvider.js";
 import { closeAnalysisClient } from "./AnalysisClientCleanup.js";
+import { ProviderCleanupError } from "../../domain/providerCleanupError.js";
+import { projectAnalysisError } from "../../domain/analysisErrorProjection.js";
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 
 /** Synthetic identity for a deterministic provider set. */
@@ -87,11 +89,38 @@ export class CompositeProvider implements AnalysisProvider {
     };
     const close: AnalysisClient["close"] = async (options) => {
       const outcomes = await Promise.all(
-        [...clients.entries()].map(([provider, client]) =>
-          closeAnalysisClient(client, provider.identity().id, options),
+        [...clients.entries()].map(async ([provider, client]) => {
+          const providerId = provider.identity().id;
+          return {
+            providerId,
+            outcome: await closeAnalysisClient(client, providerId, options),
+          };
+        }),
+      );
+      const failures = outcomes.flatMap(({ providerId, outcome }) =>
+        outcome.ok ? [] : [{ providerId, error: outcome.error }],
+      );
+      const first = failures[0];
+      if (first === undefined) return ok(null);
+      if (failures.length === 1) return err(first.error);
+      return err(
+        new ProviderCleanupError(
+          this.#identity.id,
+          [...new Set(failures.flatMap(({ error }) => error.cleanupResources))],
+          {
+            failures: failures.map(({ providerId, error }) => ({
+              provider_id: providerId,
+              error: projectAnalysisError(error),
+            })),
+          },
+          {
+            cause: new AggregateError(
+              failures.map(({ error }) => error),
+              "Multiple provider clients failed cleanup.",
+            ),
+          },
         ),
       );
-      return outcomes.find((outcome) => !outcome.ok) ?? ok(null);
     };
     return {
       executeIfReady: (operation, parameters, options) => {

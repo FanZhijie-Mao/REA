@@ -2,7 +2,7 @@
 name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "41"
+  version: "42"
 ---
 
 # REA
@@ -203,11 +203,16 @@ output also streams without a single MCP frame.
 When the retained parent ID is unknown, use `get_evidence_bundle` with
 `detail: "summary"` and exact filters for operation, target SHA-256,
 analysis-profile digest or canonical procedure address. Select its returned
-Evidence ID for the next view instead of requesting the complete bundle.
+Evidence ID for the next view instead of requesting the complete bundle. For
+large discovery results, supply `offset` and `limit`, then follow
+`pagination.next_offset` until null. Filters apply before paging;
+`matching_records` counts every match. Omitted paging keeps all matching records.
+Finish discovery before adding view Evidence, or filter a stable producer
+operation: new matching records can shift offsets in the live ledger.
 `retention: "complete-record"` means the whole record is stored; native
 value-flow truncation and unknown metadata remain separate. For an exported
 portable bundle, use `rea inspect-evidence-bundle` with JSON containing `path`,
-`detail: "summary"` and the same `filters`. Reading that file still requires
+`detail: "summary"` and the same `filters`, `offset` and `limit`. Reading that file still requires
 validating its full contents within the local memory budget.
 
 A client can also truncate a successful tool result without a REA transport
@@ -274,12 +279,15 @@ as complete while required questions remain open.
   [references/android-applications.md](references/android-applications.md)
 - Passive browser/Electron observation and static/runtime reconciliation:
   [references/runtime-observation.md](references/runtime-observation.md)
-- Evidence paging, comparisons, residual unknowns, and verification:
+- Captured browser script export, source-map locations, and module attribution:
+  [references/web-feature-attribution.md](references/web-feature-attribution.md)
+- Evidence paging, comparisons, residual unknowns, and exporting or resuming an investigation:
   [references/evidence-workflows.md](references/evidence-workflows.md)
 
 ## Finish the task
 
 Explain findings in plain language and tie them to returned evidence. When the
 user asks to build something, use normal coding tools and separate observed
-behavior from design choices. Close an opened native session with
-`close_binary` when the investigation is complete.
+behavior from design choices. Before closing or switching a target, export any
+Evidence needed for a handoff using the evidence-workflows guide. Close an
+opened native session with `close_binary` when the investigation is complete.

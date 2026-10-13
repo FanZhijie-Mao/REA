@@ -13,11 +13,13 @@ export const projectNibViewHierarchy = (
   reserveNode: () => boolean = () => true,
   maxNodes = 20_000,
 ) => {
-  const { parents, involved, invalid } = collectNibParents(
+  const { parents, involved, invalid, conflicted } = collectNibParents(
     objects,
     retainedIds,
   );
-  if (parents.size === 0) return { hierarchy: null, omitted: invalid };
+  const conflictedIds = new Set([...conflicted].map(String));
+  if (involved.size === 0)
+    return { hierarchy: null, omitted: invalid, conflictedIds };
   const children = new Map<number, number[]>();
   for (const [child, parent] of parents) {
     if (!retainedIds.has(parent) || !retainedIds.has(child)) continue;
@@ -29,7 +31,8 @@ export const projectNibViewHierarchy = (
   const pending: { id: number; depth: number; output: NibHierarchyNode[] }[] =
     [];
   for (const id of involved)
-    if (!parents.has(id)) pending.push({ id, depth: 0, output: roots });
+    if (retainedIds.has(id) && !parents.has(id))
+      pending.push({ id, depth: 0, output: roots });
   const visited = new Set<number>();
   while (pending.length > 0) {
     const item = pending.pop();
@@ -49,7 +52,8 @@ export const projectNibViewHierarchy = (
   }
   return {
     hierarchy: roots,
-    omitted: involved.size - visited.size + invalid,
+    omitted: involved.size - visited.size + invalid + conflicted.size,
+    conflictedIds,
   };
 };
 
@@ -59,10 +63,13 @@ export const mergeNibHierarchies = (
   recovered: NibHierarchyNode[],
   reserveNode: () => boolean = () => true,
   maxNodes = 20_000,
+  conflictedIds: ReadonlySet<string> = new Set(),
 ) => {
   const existing = new Map<string, NibHierarchyNode>();
   const owners = new Map<string, NibHierarchyNode[]>();
   const parents = new Map<string, string>();
+  const visitedCopies = new WeakSet<NibHierarchyNode>();
+  const disputedCopies: [NibHierarchyNode, NibHierarchyNode][] = [];
   const pending = legacy.map((node) => ({
     node,
     output: legacy,
@@ -70,10 +77,25 @@ export const mergeNibHierarchies = (
   }));
   while (pending.length > 0) {
     const entry = pending.pop();
-    if (entry === undefined || existing.has(entry.node.objectID)) continue;
-    existing.set(entry.node.objectID, entry.node);
-    owners.set(entry.node.objectID, entry.output);
-    if (entry.parent !== null) parents.set(entry.node.objectID, entry.parent);
+    if (entry === undefined) break;
+    const conflicted =
+      entry.parent !== null && conflictedIds.has(entry.node.objectID);
+    if (conflicted) {
+      const position = entry.output.indexOf(entry.node);
+      if (position >= 0) entry.output.splice(position, 1);
+      const canonical = existing.get(entry.node.objectID);
+      if (canonical === undefined) legacy.push(entry.node);
+      else if (canonical !== entry.node)
+        disputedCopies.push([canonical, entry.node]);
+    }
+    if (visitedCopies.has(entry.node)) continue;
+    visitedCopies.add(entry.node);
+    if (!existing.has(entry.node.objectID)) {
+      existing.set(entry.node.objectID, entry.node);
+      owners.set(entry.node.objectID, conflicted ? legacy : entry.output);
+      if (entry.parent !== null && !conflicted)
+        parents.set(entry.node.objectID, entry.parent);
+    }
     pending.push(
       ...entry.node.children.map((node) => ({
         node,
@@ -82,6 +104,7 @@ export const mergeNibHierarchies = (
       })),
     );
   }
+  mergeLegacyCopyChildren(disputedCopies, existing, owners);
   let omitted = 0;
   const additions = recovered.map((node) => ({
     node,
@@ -158,6 +181,15 @@ const collectNibParents = (
 ) => {
   const parents = new Map<number, number>();
   const involved = new Set<number>();
+  const conflicted = new Set<number>();
+  const addParent = (child: number, parent: number): void => {
+    if (conflicted.has(child)) return;
+    const existing = parents.get(child);
+    if (existing !== undefined && existing !== parent) {
+      parents.delete(child);
+      conflicted.add(child);
+    } else parents.set(child, parent);
+  };
   let invalid = 0;
   for (const object of objects) {
     if (!retainedIds.has(object.id)) continue;
@@ -171,19 +203,62 @@ const collectNibParents = (
       object.class_name.replace(/\0+$/u, "") === "NSWindowTemplate" &&
       child !== null
     ) {
-      parents.set(child, object.id);
+      addParent(child, object.id);
       involved.add(object.id);
       involved.add(child);
     }
     const parent = reference(object.values.NSSuperview);
     if (invalidReference(object.values.NSSuperview)) invalid += 1;
     if (parent === null) continue;
-    parents.set(object.id, parent);
+    addParent(object.id, parent);
     involved.add(object.id);
     if (retainedIds.has(parent)) involved.add(parent);
   }
-  return { parents, involved, invalid };
+  return { parents, involved, invalid, conflicted };
 };
 
 const invalidReference = (value: JsonValue | undefined): boolean =>
   value !== undefined && value !== null && reference(value) === null;
+
+/** Union descendants only after every source copy has lost disputed incoming links. */
+const mergeLegacyCopyChildren = (
+  pending: [NibHierarchyNode, NibHierarchyNode][],
+  existing: ReadonlyMap<string, NibHierarchyNode>,
+  owners: Map<string, NibHierarchyNode[]>,
+): void => {
+  // Every copy has had disputed incoming edges removed before child unions.
+  const childIndexes = new WeakMap<
+    NibHierarchyNode,
+    Map<string, NibHierarchyNode>
+  >();
+  const mergedCopies = new WeakMap<
+    NibHierarchyNode,
+    WeakSet<NibHierarchyNode>
+  >();
+  while (pending.length > 0) {
+    const [target, source] = pending.pop()!;
+    let merged = mergedCopies.get(target);
+    if (merged === undefined) {
+      merged = new WeakSet();
+      mergedCopies.set(target, merged);
+    }
+    if (target === source || merged.has(source)) continue;
+    merged.add(source);
+    let children = childIndexes.get(target);
+    if (children === undefined) {
+      children = new Map(
+        target.children.map((child) => [child.objectID, child]),
+      );
+      childIndexes.set(target, children);
+    }
+    for (const child of source.children) {
+      const canonical = children.get(child.objectID);
+      if (canonical === undefined) {
+        target.children.push(child);
+        children.set(child.objectID, child);
+        if (existing.get(child.objectID) === child)
+          owners.set(child.objectID, target.children);
+      } else if (canonical !== child) pending.push([canonical, child]);
+    }
+  }
+};

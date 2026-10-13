@@ -51,6 +51,26 @@ const FIXTURE_OPERATIONS: readonly Exclude<AnalysisOperation, "health">[] = [
   ...ARTIFACT_TOOL_CONTRACTS,
 ].map(({ name }) => name);
 
+export const createReadOnlyCapability = (
+  provider: CapabilityDescriptor["provider"],
+  operation: CapabilityDescriptor["operation"],
+): CapabilityDescriptor => ({
+  provider,
+  operation,
+  available: true,
+  reason: null,
+  effects: {
+    mutatesArtifact: false,
+    launchesProcess: false,
+    mayShowUi: false,
+    mayAccessNetwork: false,
+    mayWriteFilesystem: false,
+    changesPermissions: false,
+    requiresRoot: false,
+  },
+  limitations: [],
+});
+
 /** Declare fixture client operations before composing the production registry route. */
 export const createTestProviderRouter = (
   provider: AnalysisProvider | FixtureClientFactory,
@@ -62,21 +82,8 @@ export const createTestProviderRouter = (
           identity: () => FIXTURE_IDENTITY,
           capabilities: () =>
             FIXTURE_OPERATIONS.map((operation) => ({
-              provider: FIXTURE_IDENTITY,
-              operation,
-              available: true,
-              reason: null,
+              ...createReadOnlyCapability(FIXTURE_IDENTITY, operation),
               cachePolicy: "live",
-              effects: {
-                mutatesArtifact: false,
-                launchesProcess: false,
-                mayShowUi: false,
-                mayAccessNetwork: false,
-                mayWriteFilesystem: false,
-                changesPermissions: false,
-                requiresRoot: false,
-              },
-              limitations: [],
             })),
           createClient: provider,
         }

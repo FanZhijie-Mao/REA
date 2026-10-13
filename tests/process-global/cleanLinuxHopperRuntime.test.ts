@@ -41,6 +41,8 @@ it
     }
     // A rejection must come from the fixture we are about to launch. An
     // existing Xvfb would otherwise mask a broken executable-identity check.
+    // The fixture proc root is isolated from unrelated runner processes. Check
+    // display-name collisions and the copied executable identity before launch.
     await assertCleanLinuxHopperRuntime(
       alternateMode ? [launcher] : [],
       procRoot,
