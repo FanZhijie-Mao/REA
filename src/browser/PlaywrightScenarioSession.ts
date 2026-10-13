@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from "playwright-core";
+import type { BrowserContext } from "playwright-core";
 
 import type { BrowserScenario } from "../domain/browserScenario.js";
 import type { BrowserScenarioAction } from "../domain/browserScenarioValues.js";
@@ -14,6 +14,7 @@ import { performPlaywrightScenarioAction } from "./PlaywrightScenarioActions.js"
 import { capturePlaywrightStepArtifacts } from "./PlaywrightScenarioArtifacts.js";
 import { PlaywrightScenarioEvents } from "./PlaywrightScenarioEvents.js";
 import { PlaywrightScenarioStorage } from "./PlaywrightScenarioStorage.js";
+import { PlaywrightScenarioServiceWorkers } from "./PlaywrightScenarioServiceWorkers.js";
 import { withPlaywrightExecutionBoundary } from "./PlaywrightExecutionBoundary.js";
 import {
   browserScenarioCaptureData,
@@ -50,41 +51,13 @@ const installCookies = async (
   );
 };
 
-const blockAttachedServiceWorkers = async (page: Page): Promise<void> => {
-  const hasServiceWorker = await page.evaluate(`(async () => {
-    if (!("serviceWorker" in navigator)) return false;
-    const serviceWorker = navigator.serviceWorker;
-    if (serviceWorker.controller !== null) return true;
-    return (await serviceWorker.getRegistrations()).length > 0;
-  })()`);
-  // An attached context belongs to the caller. Reject a block request when it
-  // already has a worker instead of unregistering that caller-owned resource.
-  if (hasServiceWorker)
-    throw new BrowserObservationError(OPERATION, "target_not_allowed");
-  const blockRegistration = `(() => {
-    if (!("serviceWorker" in navigator)) return;
-    Object.defineProperty(ServiceWorkerContainer.prototype, "register", {
-      configurable: false,
-      value: () => Promise.reject(new Error("service workers are blocked by scenario policy"))
-    });
-  })()`;
-  await page.addInitScript(blockRegistration);
-  await page.evaluate(blockRegistration);
-};
-
 const initializePage = async (
   context: BrowserContext,
-  page: Page,
   scenario: BrowserScenario,
   secrets: BrowserScenarioSecrets,
 ): Promise<void> => {
   context.setDefaultTimeout(0);
   context.setDefaultNavigationTimeout(0);
-  if (
-    scenario.browser.mode === "connect" &&
-    scenario.environment.service_workers === "block"
-  )
-    await blockAttachedServiceWorkers(page);
   await installCookies(context, scenario, secrets);
 };
 
@@ -97,6 +70,7 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
   private readonly secrets: BrowserScenarioSecrets;
   private readonly eventCapture: PlaywrightScenarioEvents;
   private readonly storage: PlaywrightScenarioStorage | undefined;
+  private readonly serviceWorkers: PlaywrightScenarioServiceWorkers | undefined;
   private readonly signal: AbortSignal | undefined;
   #storageReleased = false;
 
@@ -107,6 +81,7 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
       readonly secrets: BrowserScenarioSecrets;
       readonly eventCapture: PlaywrightScenarioEvents;
       readonly storage: PlaywrightScenarioStorage | undefined;
+      readonly serviceWorkers: PlaywrightScenarioServiceWorkers | undefined;
       readonly signal: AbortSignal | undefined;
     },
   ) {
@@ -116,6 +91,7 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
     this.secrets = options.secrets;
     this.eventCapture = options.eventCapture;
     this.storage = options.storage;
+    this.serviceWorkers = options.serviceWorkers;
     this.signal = options.signal;
     this.version = opened.browser.version();
     this.initialUrl = opened.page.url();
@@ -179,6 +155,11 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
         options.signal,
       );
       await withPlaywrightExecutionBoundary(
+        () => session.serviceWorkers?.assertBlocked() ?? Promise.resolve(),
+        undefined,
+        options.signal,
+      );
+      await withPlaywrightExecutionBoundary(
         () => session.storage?.settle() ?? Promise.resolve(),
         undefined,
         options.signal,
@@ -228,9 +209,21 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
   ): Promise<PlaywrightScenarioSession> {
     let events: PlaywrightScenarioEvents | undefined;
     let storage: PlaywrightScenarioStorage | undefined;
+    const serviceWorkers =
+      scenario.browser.mode === "connect" &&
+      scenario.environment.service_workers === "block"
+        ? new PlaywrightScenarioServiceWorkers(
+            opened.page,
+            scenario.browser.cdp_endpoint,
+            scenario.browser.target_id,
+          )
+        : undefined;
     try {
       await withPlaywrightExecutionBoundary(
-        () => initializePage(opened.context, opened.page, scenario, secrets),
+        async () => {
+          await serviceWorkers?.initialize();
+          await initializePage(opened.context, scenario, secrets);
+        },
         undefined,
         options.signal,
       );
@@ -261,6 +254,7 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
         secrets,
         eventCapture: events,
         storage,
+        serviceWorkers,
         signal: options.signal,
       });
     } catch (cause: unknown) {
@@ -276,11 +270,12 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
           }
         }
         try {
+          // A failed restoration retains the connection so cleanup can retry.
+          if (!opened.cleanup.browserClosed) await serviceWorkers?.close(true);
           await opened.cleanup.close(
             events === undefined
               ? undefined
               : () => events?.finish() ?? Promise.resolve(),
-            options.signal,
           );
         } catch (failure: unknown) {
           browserFailure = { cause: failure };
@@ -359,6 +354,11 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
     signal?: AbortSignal,
   ) {
     await withPlaywrightExecutionBoundary(
+      () => this.serviceWorkers?.assertBlocked() ?? Promise.resolve(),
+      undefined,
+      signal,
+    );
+    await withPlaywrightExecutionBoundary(
       () => this.storage?.settle() ?? Promise.resolve(),
       undefined,
       signal,
@@ -387,6 +387,8 @@ export class PlaywrightScenarioSession implements BrowserScenarioSessionPort {
       }
     }
     try {
+      if (!this.opened.cleanup.browserClosed)
+        await this.serviceWorkers?.close(stopLoading);
       await this.opened.cleanup.close(() => this.eventCapture.finish());
     } catch (failure: unknown) {
       browserFailure = { cause: failure };

@@ -15,6 +15,13 @@ there is no separate origin allowlist or request-interception layer. Environment
 settings (including service workers blocked by default), empty storage, and a
 final sanitized URL capture are supplied by default. Set
 `environment.service_workers` to `allow` when the application requires them.
+In an attached browser, `block` rejects capture when any current page frame has
+a controller or an existing registration, including after navigation. It does
+not unregister caller-owned workers. Navigation can run the destination's normal
+application code before this check; rejection does not undo those effects.
+The temporary registration wrapper is restored before disconnecting.
+Cleanup removes the owned future-document scripts before restoring live frames;
+cancellation stops pending navigation even when no storage seeds were supplied.
 Add secret declarations, storage seeds, and additional artifact or event
 capture only when needed. Action, secret, and storage counts are not capped.
 Duration, action, and navigation
