@@ -28,6 +28,16 @@ const environmentSchema = z.object({
     .min(1)
     .refine(isAbsolute, "REA_IDA_MCP_CONFIG must be absolute")
     .optional(),
+  REA_ANGR_MCP_CONFIG: z
+    .string()
+    .min(1)
+    .refine(isAbsolute, "REA_ANGR_MCP_CONFIG must be absolute")
+    .optional(),
+  REA_ANGR_PYTHON: z
+    .string()
+    .min(1)
+    .refine(isAbsolute, "REA_ANGR_PYTHON must be absolute")
+    .optional(),
   GHIDRA_INSTALL_DIR: z
     .string()
     .min(1)

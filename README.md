@@ -164,7 +164,7 @@ Additional tools and host support depend on the target:
 
 | Target                 | What REA returns                                                                     | Requirements and guide                                                                                                                |
 | ---------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Native binaries        | Pseudocode, assembly, strings, symbols, calls and references                         | Hopper, Ghidra or IDA; [native analysis](docs/native-investigation.md)                                                                |
+| Native binaries        | Pseudocode, assembly, strings, symbols, calls and references                         | Hopper, Ghidra, IDA or angr; [native analysis](docs/native-investigation.md)                                                          |
 | Offline ELF layout     | Sections, segments, original symbols/relocations and static mitigation candidates    | Caller-supplied pwntools on Linux x64; [binary diagnostics](docs/binary-diagnostics.md)                                               |
 | Go binaries            | Embedded compiler version, modules, replacements and build settings                  | Built-in static ELF/PE/thin Mach-O inspection; no Go installation required                                                            |
 | Rust binaries          | Embedded cargo-auditable crate names, versions, sources and dependency edges         | Built-in static ELF/PE/thin Mach-O inspection; [Rust binaries](docs/rust-binaries.md)                                                 |
@@ -201,7 +201,8 @@ or update either provider.
 
 Native formats and host support vary by provider. See
 [Hopper and Ghidra setup](docs/installation.md#hopper), the
-[IDA guide](docs/ida-provider.md) (including an optional native MCP bridge), and
+[IDA guide](docs/ida-provider.md) (including an optional native MCP bridge),
+the [angr guide](docs/angr-provider.md), and
 [experimental Windows Ghidra support](docs/windows-ghidra-p0.md).
 Ghidra also supports [16-bit DOS analysis](docs/ghidra-dos.md).
 For large binaries, raise the provider's startup deadline with
@@ -256,11 +257,11 @@ Any agent that supports local MCP servers. Setup configures the
 </details>
 
 <details>
-<summary><strong>Do I need Hopper, Ghidra or IDA?</strong></summary>
+<summary><strong>Do I need Hopper, Ghidra, IDA or angr?</strong></summary>
 
 Deep native analysis uses one of them. Static JavaScript and .NET inspection
 work without a native analysis engine. Setup can install Hopper after approval;
-Ghidra and IDA use your existing installations. See [provider setup](docs/installation.md#hopper).
+Ghidra, IDA and angr use your existing installations. See [provider setup](docs/installation.md#hopper).
 
 </details>
 

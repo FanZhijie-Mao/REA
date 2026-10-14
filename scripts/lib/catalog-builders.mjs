@@ -219,6 +219,13 @@ export const providerCatalog = (sources) => {
       contracts: declaredContracts("ida", sources.idaProvider.IDA_OPERATIONS),
     },
     {
+      identity: sources.angrProvider.ANGR_PROVIDER_IDENTITY,
+      contracts: declaredContracts(
+        "angr",
+        sources.angrProvider.ANGR_OPERATIONS,
+      ),
+    },
+    {
       identity: sources.nativeProvider.NATIVE_MACOS_PROVIDER_IDENTITY,
       contracts: sources.nativeContracts.NATIVE_TOOL_CONTRACTS,
     },
