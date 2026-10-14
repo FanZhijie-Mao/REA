@@ -1,5 +1,6 @@
 import { z } from "incur";
 import { AnalysisError } from "../domain/analysisErrorBase.js";
+import { AnalysisInputError } from "../domain/analysisErrorCore.js";
 import { AdbDeviceAnalysisService } from "../application/adb/AdbDeviceAnalysisService.js";
 import type { AdbDeviceAnalysisPort } from "../application/adb/AdbDeviceAnalysisPort.js";
 import { createAdbDeviceAnalysisProvider } from "../composition/adb.js";
@@ -21,10 +22,20 @@ export const registerAdbCommands = (
   ),
 ): void => {
   const service = new AdbDeviceAnalysisService(provider);
-  const execute = (name: string, operation: AdbOperation, input: unknown) =>
+  /**
+   * Build the request inside the logged boundary so a caller-input failure in
+   * its construction keeps the canonical projection and exit status.
+   */
+  const executeRequest = (
+    name: string,
+    operation: AdbOperation,
+    buildInput: () => unknown,
+  ) =>
     withCommandCancellation((signal) =>
       logCliCommand(logger, name, async () => {
-        const result = await service.execute(operation, input, { signal });
+        const result = await service.execute(operation, buildInput(), {
+          signal,
+        });
         try {
           await provider.close();
         } catch (cause) {
@@ -35,6 +46,9 @@ export const registerAdbCommands = (
         return result.ok ? result.value : projectAnalysisError(result.error);
       }),
     );
+
+  const execute = (name: string, operation: AdbOperation, input: unknown) =>
+    executeRequest(name, operation, () => input);
 
   const serial = z
     .string()
@@ -348,35 +362,49 @@ export const registerAdbCommands = (
           "Typed extra as type:key:value (string, boolean, int, long, float), repeatable",
         ),
     }),
-    run: ({ args, options }) => {
-      const extras = options.extra.map((entry) => {
-        const first = entry.indexOf(":");
-        const second = entry.indexOf(":", first + 1);
-        if (first === -1 || second === -1)
-          throw new Error(`--extra expects type:key:value, received: ${entry}`);
-        return {
-          type: entry.slice(0, first) as
-            | "string"
-            | "boolean"
-            | "int"
-            | "long"
-            | "float",
-          key: entry.slice(first + 1, second),
-          value: entry.slice(second + 1),
-        };
-      });
-      return execute(CLI_COMMANDS.startAdbActivity, "start_adb_activity", {
-        serial: args.serial,
-        action: args.action,
-        ...(options["data-uri"] === undefined
-          ? {}
-          : { data_uri: options["data-uri"] }),
-        ...(options.component === undefined
-          ? {}
-          : { component: options.component }),
-        extras,
-      });
-    },
+    run: ({ args, options }) =>
+      executeRequest(
+        CLI_COMMANDS.startAdbActivity,
+        "start_adb_activity",
+        () => ({
+          serial: args.serial,
+          action: args.action,
+          ...(options["data-uri"] === undefined
+            ? {}
+            : { data_uri: options["data-uri"] }),
+          ...(options.component === undefined
+            ? {}
+            : { component: options.component }),
+          extras: options.extra.map((entry, index) => {
+            const first = entry.indexOf(":");
+            const second = entry.indexOf(":", first + 1);
+            if (first === -1 || second === -1)
+              throw new AnalysisInputError(
+                CLI_COMMANDS.startAdbActivity,
+                {
+                  userMessage: `--extra expects type:key:value, received: ${entry}`,
+                },
+                [
+                  {
+                    path: ["extra", index],
+                    reason: "invalid_format",
+                    message: "--extra expects type:key:value",
+                  },
+                ],
+              );
+            return {
+              type: entry.slice(0, first) as
+                | "string"
+                | "boolean"
+                | "int"
+                | "long"
+                | "float",
+              key: entry.slice(first + 1, second),
+              value: entry.slice(second + 1),
+            };
+          }),
+        }),
+      ),
   });
   cli.command(CLI_COMMANDS.stopAdbApp, {
     description: "Force-stop every process of one package",
