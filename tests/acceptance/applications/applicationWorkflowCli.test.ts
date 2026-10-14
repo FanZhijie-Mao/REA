@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { Client } from "@modelcontextprotocol/client";
@@ -1221,7 +1222,9 @@ describe("application workflow CLI and MCP capture lifetimes", () => {
         "--input-type=module",
         "--eval",
         "const module = await import(process.argv[1]); console.log(JSON.stringify(module.default()));",
-        join(root, String(index), "parser.mjs"),
+        // ESM import() takes a URL specifier; a Windows drive path parses as a
+        // `c:` URL scheme and is rejected.
+        pathToFileURL(join(root, String(index), "parser.mjs")).href,
       ]);
       expect(JSON.parse(stdout)).toEqual({
         kind: "capture-boundary",
