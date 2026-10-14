@@ -132,8 +132,17 @@ These commands describe binary-session providers and auxiliary capabilities.
 For the complete MCP surface, use the connected server's tool list and the
 session's advertised availability; individual guides describe prerequisites.
 
-With automatic selection, REA uses the single available provider that supports
-the target. When several providers support it, select one explicitly:
+With automatic selection, REA binds the single eligible provider. Eligibility
+requires host availability, target compatibility, and a resolved analysis
+profile; a provider that is merely installed is not eligible. When two or more
+providers are eligible, REA binds none and reports the decision rather than
+choosing an engine. `rea analyze` then fails the requested operation with
+`details.selection_reason: "ambiguous"` and the candidate IDs — `details.operation`
+names the internal provider operation the workflow reached first, not the CLI
+command — and an MCP client sees `analysis_provider_selection_state:
+"selection_required"` in `binary_session`, where `tool_availability` reports each
+deep operation as `provider_selection_required` with the eligible IDs. Select one
+explicitly:
 
 ```bash
 rea analyze /absolute/path/to/program --provider hopper
@@ -149,11 +158,21 @@ overrides it. In MCP, pass `provider_id` to `open_binary`:
 }
 ```
 
+REA does not rank providers: the right engine depends on the operations the task
+needs. Compare each `analysis_provider_candidates[]` entry's capability groups,
+limitations, effects, and rejection codes with the analysis you intend to run,
+then reopen the same target with that `provider_id`. Provider availability alone
+does not establish better or more complete analysis.
+
 The selected provider remains bound to the session until an explicit switch
-or close. Provider failures are returned with their original reason. For an
-`ambiguous` selection error, choose from `details.candidate_ids`; for
-`provider_unavailable`, run `rea doctor --provider ID --json` to diagnose the
-selected engine. See [task readiness](installation.md#check-readiness-for-your-task)
+or close. Reopening the same target without `--provider`/`provider_id`, or with
+`auto` when the current route was already resolved by `auto`, keeps the existing
+route instead of re-deciding. Provider failures are returned with their original
+reason and never trigger an automatic switch: to use another engine, understand
+the failure first and reopen the target with its `provider_id`. For
+`provider_unavailable`, run
+`rea doctor --provider ID --json` to diagnose the selected engine. See
+[task readiness](installation.md#check-readiness-for-your-task)
 and [provider selection](mcp-contracts.md#identity-and-discovery).
 
 The session reports work still in progress through `analysis_activity`.

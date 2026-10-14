@@ -25,6 +25,12 @@ import {
   evaluateAnalysisProviderCandidate,
   type AnalysisProviderCandidateEvaluation,
 } from "./AnalysisProviderEvaluation.js";
+import {
+  decideAutoProviderSelection,
+  type EligibleAnalysisProviderEvaluation,
+  type ProviderCandidateEligibility,
+  type ProviderSelectionState,
+} from "./AutoProviderSelectionPolicy.js";
 import { compareUnicodeCodePoints } from "../../domain/unicodeCodePointOrder.js";
 
 /** Deterministic discovery truth for one configured deep provider. */
@@ -41,6 +47,12 @@ export interface AnalysisProviderCandidateStatus {
         readonly diagnostics: Readonly<Record<string, JsonValue>>;
       };
   readonly selected: boolean;
+  /**
+   * Whether this provider can be selected for the current target. A provider
+   * that is merely installed is not eligible until availability, target
+   * compatibility, and an identity-matched analysis profile all hold.
+   */
+  readonly eligibility: ProviderCandidateEligibility;
   readonly capabilities: readonly CapabilityDescriptor[];
 }
 
@@ -58,6 +70,11 @@ export interface AnalysisProviderBinding {
 export interface AnalysisProviderSelection {
   readonly requestedProviderId: string;
   readonly binding: AnalysisProviderBinding | null;
+  /**
+   * Deterministic outcome of this selection. Eligible candidates are reported
+   * separately per candidate so consumers never re-derive eligibility.
+   */
+  readonly selectionState: ProviderSelectionState;
   readonly candidates: readonly AnalysisProviderCandidateStatus[];
 }
 
@@ -185,6 +202,7 @@ export class AnalysisProviderRegistry {
       return ok({
         requestedProviderId: selector,
         binding: null,
+        selectionState: "unbound",
         candidates: baseline,
       });
     if (selector !== "auto")
@@ -200,18 +218,26 @@ export class AnalysisProviderRegistry {
     });
   }
 
-  /** Explain why a deep operation is unavailable on an unbound target. */
+  /**
+   * Explain why a deep operation is unavailable on an unbound target.
+   *
+   * A target that is waiting for an explicit provider choice reports the
+   * actionable `ambiguous` reason rather than `provider_unavailable`: the
+   * configured providers are usable, and the caller must select one.
+   */
   unboundOperationError(
     operation: string,
     selection: AnalysisProviderSelection,
   ): ProviderSelectionError {
     const reason: ProviderSelectionFailureReason =
-      selection.candidates.length > 0 &&
-      selection.candidates.every(
-        ({ targetSupport }) => targetSupport.status === "unsupported",
-      )
-        ? "target_unsupported"
-        : "provider_unavailable";
+      selection.selectionState === "selection_required"
+        ? "ambiguous"
+        : selection.candidates.length > 0 &&
+            selection.candidates.every(
+              ({ targetSupport }) => targetSupport.status === "unsupported",
+            )
+          ? "target_unsupported"
+          : "provider_unavailable";
     return selectionError(
       reason,
       selection.requestedProviderId,
@@ -257,10 +283,7 @@ export class AnalysisProviderRegistry {
       selectedResult(
         providerId,
         source,
-        {
-          ...evaluated,
-          profile: evaluated.profile,
-        },
+        { ...evaluated, profile: evaluated.profile },
         statuses,
       ),
     );
@@ -294,7 +317,9 @@ export class AnalysisProviderRegistry {
               )
             : ok({
                 candidate: provider,
-                status,
+                // A failed prerequisite already decided this candidate; the
+                // profile probe is skipped and the outcome is not an omission.
+                status: { ...status, eligibility: "ineligible" },
               } satisfies AnalysisProviderCandidateEvaluation);
         },
       ),
@@ -311,22 +336,16 @@ export class AnalysisProviderRegistry {
     )?.profileError;
     if (cleanupFailure !== undefined) return err(cleanupFailure);
     const statuses = evaluations.map(({ status }) => status);
-    const usable = evaluations.filter(
-      (
-        evaluation,
-      ): evaluation is AnalysisProviderCandidateEvaluation & {
-        readonly profile: AnalysisProfileCommitment;
-      } => evaluation.profile !== undefined,
-    );
-    if (usable.length === 0)
+    const decision = decideAutoProviderSelection(evaluations);
+    if (decision.state !== "bound")
       return ok({
         requestedProviderId: "auto",
         binding: null,
+        selectionState: decision.state,
         candidates: statuses,
       });
-    if (usable.length > 1)
-      return err(selectionError("ambiguous", "auto", statuses));
-    const selected = usable[0];
+    const selected: EligibleAnalysisProviderEvaluation | undefined =
+      decision.eligible[0];
     if (selected === undefined)
       throw new TypeError("Usable provider selection disappeared");
     return ok(
@@ -356,6 +375,7 @@ const candidateStatus = (
           }
         : cloneTargetSupport(provider.inspectTargetSupport(target)),
     selected: false,
+    eligibility: "unevaluated",
     capabilities: readiness.capabilities.map((capability) =>
       structuredClone(capability),
     ),
@@ -368,31 +388,26 @@ const signalIsAborted = (signal: AbortSignal | undefined): boolean =>
 const selectedResult = (
   requestedProviderId: string,
   source: AnalysisProviderBinding["selectionSource"],
-  evaluated: AnalysisProviderCandidateEvaluation & {
-    readonly profile: AnalysisProfileCommitment;
-  },
+  evaluated: EligibleAnalysisProviderEvaluation,
   statuses: readonly AnalysisProviderCandidateStatus[],
 ): AnalysisProviderSelection => {
-  const identity = evaluated.profile.provider;
-  const capabilities = evaluated.status.capabilities.map((capability) => ({
-    ...capability,
-    provider: structuredClone(identity),
-  }));
+  // The evaluation already attributes the resolved identity to the candidate and
+  // every capability it published, so selecting one only marks the choice.
+  const capabilities = evaluated.status.capabilities;
   const selectedStatus = {
     ...evaluated.status,
-    provider: structuredClone(identity),
     selected: true,
-    capabilities,
   } satisfies AnalysisProviderCandidateStatus;
   return {
     requestedProviderId,
     binding: {
       provider: evaluated.candidate,
-      identity: structuredClone(identity),
+      identity: structuredClone(evaluated.profile.provider),
       selectionSource: source,
       profile: structuredClone(evaluated.profile),
       capabilities,
     },
+    selectionState: "bound",
     candidates: replaceCandidate(statuses, selectedStatus),
   };
 };

@@ -114,6 +114,7 @@ const candidate = (
     diagnostics: {},
   },
   selected: true,
+  eligibility: "eligible",
   capabilities,
 });
 
