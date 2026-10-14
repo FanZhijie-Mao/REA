@@ -334,10 +334,44 @@ class ErrorEvidenceTransport implements Transport {
     if (
       !isJSONRPCResultResponse(message) ||
       !isCallToolResult(message.result) ||
-      message.result.isError !== true ||
-      message.result.structuredContent === undefined
+      message.result.isError !== true
     )
       return message;
+    if (message.result.structuredContent === undefined) {
+      // Errors the SDK builds itself (input validation, a thrown handler)
+      // carry no structured carrier to retain. Small ones pass through
+      // untouched; an oversized one becomes a bounded transport constraint
+      // (#3221). Raw request arguments stay out of retained Evidence by
+      // policy, so retention is unavailable and the diagnostic says so.
+      const budget = this.delivery.resultBudgetBytes;
+      const wireBytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+      if (wireBytes <= budget) return message;
+      const operation = tool ?? "mcp_tool_error";
+      const failure = new AnalysisResourceConstraintError(
+        operation,
+        "transport",
+        "The tool call failed, but its complete error response exceeds the MCP response budget.",
+        {
+          boundary: "mcp-response",
+          result_budget_bytes: budget,
+          response_bytes_at_least: wireBytes,
+          retention: "unavailable",
+          retention_reason:
+            "Raw request arguments are excluded from retained Evidence.",
+        },
+        {
+          remediationAction:
+            "Restart REA with a larger REA_MCP_MAX_RESPONSE_BYTES and matching client receive buffer, then retry. The original validation error was not retained.",
+        },
+      );
+      return {
+        ...message,
+        result: this.delivery.toErrorToolResult(
+          failure,
+          carriesTargetContentMarker(message.result),
+        ),
+      };
+    }
     const structured = jsonObjectSchema.parse(message.result.structuredContent);
     const budget = this.delivery.resultBudgetBytes;
     // Count the provenance marker exactly as the projected error did, and keep

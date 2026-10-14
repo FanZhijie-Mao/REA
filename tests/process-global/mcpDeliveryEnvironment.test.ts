@@ -149,6 +149,64 @@ it("keeps independent server budgets for successful results and oversized errors
   expect(large.delivery.resultBudgetBytes).toBe(largeBudget - 1024);
 });
 
+it("bounds an oversized SDK validation error without retaining raw arguments (#3221)", async () => {
+  // Pin the default budget: a larger ambient budget would let the giant
+  // echo through and the assertions below would not hold.
+  vi.stubEnv(
+    "REA_MCP_MAX_RESPONSE_BYTES",
+    String(STDIO_DEFAULT_MAX_BUFFER_SIZE),
+  );
+  const analysis = {
+    execute: () =>
+      Promise.resolve(
+        ok(
+          createAnalysisExecution(
+            "fixture",
+            { id: "fixture", name: "Fixture", version: "1" },
+            { rawResult: "fixture" },
+          ),
+        ),
+      ),
+  };
+  const server = createServer({ kind: "fixed", analysis });
+  server.registerTool(
+    "strict_probe",
+    { inputSchema: z.object({ known: z.string() }).strict() },
+    async () => ({ content: [{ type: "text" as const, text: "unreachable" }] }),
+  );
+  const client = await connect(server);
+  const giant = await client.callTool({
+    name: "strict_probe",
+    arguments: { ["K".repeat(10_485_600)]: 1 },
+  });
+  if (giant === undefined) throw new Error("Missing giant-key result");
+  // The 10 MB key echo cannot fit the default budget: bounded diagnostic.
+  expect(Buffer.byteLength(JSON.stringify(giant), "utf8")).toBeLessThan(
+    STDIO_DEFAULT_MAX_BUFFER_SIZE,
+  );
+  expect(parseMcpToolError(giant)).toMatchObject({
+    error: {
+      code: "resource_constraint",
+      details: {
+        reported_limits: {
+          result_budget_bytes: STDIO_DEFAULT_MAX_BUFFER_SIZE - 1024,
+          retention: "unavailable",
+        },
+      },
+    },
+  });
+  const small = await client.callTool({
+    name: "strict_probe",
+    arguments: { unexpected: 1 },
+  });
+  if (small === undefined) throw new Error("Missing small-key result");
+  expect(small.isError).toBe(true);
+  expect(
+    (small.content.find((item) => item.type === "text") as { text: string })
+      .text,
+  ).toContain("unexpected");
+});
+
 it("snapshots the runtime-selected environment before optional loading and reuses it for replacement servers", async () => {
   const selected = {
     REA_MCP_MAX_RESPONSE_BYTES: String(2 * STDIO_DEFAULT_MAX_BUFFER_SIZE),
