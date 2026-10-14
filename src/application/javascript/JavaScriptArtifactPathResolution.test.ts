@@ -730,6 +730,66 @@ describe("ESM module URL path decoding", () => {
     },
   );
 
+  it("applies URL text preprocessing before decoding an imported path", () => {
+    const files = fileMap([
+      file("app/esm/entry.mjs", "root"),
+      file("app/esm/entry.cjs", "root"),
+      file("app/esm/tabname.js", "root"),
+      file("app/esm/nlname.js", "root"),
+      file("app/esm/crname.js", "root"),
+      file("app/esm/literal\tname.js", "root"),
+      file("app/esm/literal\tname.cjs", "root"),
+    ]);
+    for (const [declaredPath, target] of [
+      ["./tab\tname.js", "app/esm/tabname.js"],
+      ["./nl\nname.js", "app/esm/nlname.js"],
+      ["./cr\rname.js", "app/esm/crname.js"],
+      ["./tabname.js ", "app/esm/tabname.js"],
+      // A percent-encoded tab is a filename byte, not URL text to remove.
+      ["./literal%09name.js", "app/esm/literal\tname.js"],
+    ] as const)
+      expect(
+        resolve({
+          declaredPath,
+          sourcePath: "app/esm/entry.mjs",
+          context: "module-specifier",
+          moduleKind: "import",
+          files,
+        }),
+      ).toMatchObject({
+        declared_path: declaredPath,
+        resolved_path: target,
+        resolution_status: "resolved",
+      });
+    // CommonJS requests are literal filenames, so the tab is not URL text.
+    expect(
+      resolve({
+        declaredPath: "./literal\tname.cjs",
+        sourcePath: "app/esm/entry.cjs",
+        context: "module-specifier",
+        moduleKind: "require",
+        files,
+      }),
+    ).toMatchObject({
+      resolved_path: "app/esm/literal\tname.cjs",
+      resolution_status: "resolved",
+    });
+    // A space before the suffix is interior URL text, not a trailing one, so
+    // preprocessing must precede the query/fragment split.
+    expect(
+      resolve({
+        declaredPath: "./tabname.js #entry",
+        sourcePath: "app/esm/entry.mjs",
+        context: "module-specifier",
+        moduleKind: "import",
+        files,
+      }),
+    ).toMatchObject({
+      resolved_path: null,
+      resolution_status: "not-found",
+    });
+  });
+
   it("rejects encoded separators and paths escaping the artifact root", () => {
     const files = fileMap([
       file("app/esm/entry.mjs", "root"),

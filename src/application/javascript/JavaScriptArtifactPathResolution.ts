@@ -515,11 +515,17 @@ const contextualCandidate = (
     )
       return bareModuleCandidate(input);
     if (input.moduleKind !== "require") {
-      if (/%(?:2f|5c)/iu.test(stripQueryAndFragment(declared)))
+      // Node parses an ESM specifier as a URL, so the URL parser's input text
+      // rules apply before the single percent-decoding pass: embedded tabs and
+      // newlines are removed and trailing C0 controls and spaces are trimmed.
+      // Preprocessing precedes the query/fragment split, and an encoded tab
+      // stays a literal filename byte.
+      const moduleUrlText = stripQueryAndFragment(htmlUrlText(declared));
+      if (/%(?:2f|5c)/iu.test(moduleUrlText))
         return unresolvedCandidate("rejected", [
           "ES module URL paths cannot contain percent-encoded slash or backslash bytes.",
         ]);
-      const decoded = decodeModuleUrlPath(stripQueryAndFragment(declared));
+      const decoded = decodeModuleUrlPath(moduleUrlText);
       if (typeof decoded !== "string") return decoded;
       declared = decoded;
     }
