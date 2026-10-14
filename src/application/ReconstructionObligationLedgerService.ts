@@ -45,7 +45,7 @@ export const buildReconstructionObligationLedgerEvidenceValidated = (
     });
     return ok(createLedgerEvidence(input, ledger));
   } catch (cause: unknown) {
-    if (cause instanceof z.ZodError)
+    if (cause instanceof z.ZodError || cause instanceof TypeError)
       return err(workflowInputError(OPERATION, cause));
     return err(
       new AnalysisProtocolError(
