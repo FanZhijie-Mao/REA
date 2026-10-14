@@ -5,6 +5,8 @@ import {
   expectConfigurationRefusal,
   serveCli as serve,
 } from "./cliServeHarness.js";
+import { cliTest } from "../../support/cli/cliFixture.js";
+import { analysisErrorProjectionSchema } from "../../../src/contracts/errorSchemas.js";
 import {
   createTestWorkspace,
   removeTestWorkspace,
@@ -41,6 +43,63 @@ it("validates device serials before contacting any device", async () => {
     category: "invalid_input",
   });
 });
+
+cliTest(
+  "classifies a malformed --extra before any device operation",
+  async ({ cli }) => {
+    const workspace = await createTestWorkspace("rea-adb-cli-extra-");
+    onTestFinished(() => removeTestWorkspace(workspace.root));
+    const environment = {
+      HOME: workspace.root,
+      XDG_CONFIG_HOME: workspace.path("config"),
+      XDG_CACHE_HOME: workspace.path("cache"),
+      XDG_DATA_HOME: workspace.path("data"),
+    };
+    for (const extra of ["string:key", ":", "string"]) {
+      const result = await cli.run({
+        arguments: [
+          "start-adb-activity",
+          "emulator-5554",
+          "android.intent.action.VIEW",
+          "--extra",
+          extra,
+          "--json",
+        ],
+        environment,
+      });
+      expect(result.exitCode, result.stdout).toBe(1);
+      const projection = analysisErrorProjectionSchema.parse(result.json);
+      expect(projection).toMatchObject({
+        code: "invalid_request",
+        category: "invalid_input",
+        message: expect.stringContaining("type:key:value"),
+        details: {
+          issues: [
+            expect.objectContaining({
+              path: ["extra", 0],
+              reason: "invalid_format",
+            }),
+          ],
+        },
+      });
+    }
+    // A well-formed extra still reaches provider admission instead of being
+    // rejected by the delimiter check.
+    const admitted = await cli.run({
+      arguments: [
+        "start-adb-activity",
+        "emulator-5554",
+        "android.intent.action.VIEW",
+        "--extra",
+        "string:key:value",
+        "--json",
+      ],
+      environment: { ...environment, REA_ADB_PATH: "/nonexistent/adb" },
+    });
+    expect(admitted.exitCode, admitted.stdout).toBe(1);
+    expect(admitted.json).toMatchObject({ code: "capability_unavailable" });
+  },
+);
 
 it("requires the output directory option on pull", async () => {
   const result = await serve([
