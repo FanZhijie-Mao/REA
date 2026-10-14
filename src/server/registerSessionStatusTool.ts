@@ -72,7 +72,7 @@ export const registerSessionStatusTool = (
           androidAnalysisAvailability: androidAvailability,
         },
         clientFeatures,
-      );
+      ).filter(({ name }) => server.advertisesTool(name));
       const serverIdentity = createServerIdentity({
         startedAt,
         expected: {

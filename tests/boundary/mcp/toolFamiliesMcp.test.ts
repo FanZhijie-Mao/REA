@@ -1,0 +1,104 @@
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/server";
+import { describe, expect, it } from "vitest";
+
+import { TOOL_CONTRACTS } from "../../../src/contracts/toolContracts.js";
+import { TOOL_FAMILY_DEFINITIONS } from "../../../src/contracts/toolFamilies.js";
+import { EvidenceMcpServer } from "../../../src/server/EvidenceMcpServer.js";
+import { ToolResultDelivery } from "../../../src/server/toolResult.js";
+import { toolRegistrationOptions } from "../../../src/server/toolRegistrationOptions.js";
+
+const scopedServer = (
+  advertisedToolFamilies: ReadonlySet<string> | undefined,
+): EvidenceMcpServer =>
+  new EvidenceMcpServer(
+    { name: "tool-families", version: "0" },
+    { capabilities: {} },
+    undefined,
+    new ToolResultDelivery(STDIO_DEFAULT_MAX_BUFFER_SIZE),
+    undefined,
+    false,
+    advertisedToolFamilies,
+  );
+
+const registerCatalog = (server: EvidenceMcpServer): void => {
+  for (const contract of TOOL_CONTRACTS)
+    server.registerTool(
+      contract.name,
+      toolRegistrationOptions(contract),
+      async () => ({ content: [] }),
+    );
+};
+
+const withClient = async (
+  server: EvidenceMcpServer,
+  use: (client: Client) => Promise<void>,
+): Promise<void> => {
+  const client = new Client({ name: "tool-families", version: "0" });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    await use(client);
+  } finally {
+    await Promise.allSettled([client.close(), server.close()]);
+  }
+};
+
+const familyTools = (...ids: readonly string[]): readonly string[] =>
+  TOOL_FAMILY_DEFINITIONS.filter(({ id }) => ids.includes(id)).flatMap(
+    ({ contracts }) => contracts.map(({ name }) => name),
+  );
+
+describe("MCP tool family advertising", () => {
+  it("advertises every catalog tool when no scope is set", async () => {
+    const server = scopedServer(undefined);
+    registerCatalog(server);
+    await withClient(server, async (client) => {
+      expect(
+        (await client.listTools()).tools.map(({ name }) => name).sort(),
+      ).toEqual(TOOL_CONTRACTS.map(({ name }) => name).sort());
+    });
+  });
+
+  it("advertises only the scoped families", async () => {
+    const server = scopedServer(new Set(["session", "javascript-runtime"]));
+    registerCatalog(server);
+    await withClient(server, async (client) => {
+      const advertised = (await client.listTools()).tools
+        .map(({ name }) => name)
+        .sort();
+      expect(advertised).toEqual(
+        [...familyTools("session", "javascript-runtime")].sort(),
+      );
+      expect(advertised).not.toContain("inspect_macho");
+    });
+  });
+
+  it("fails calls to out-of-scope tools with the disabled-tool error", async () => {
+    const server = scopedServer(new Set(["session"]));
+    registerCatalog(server);
+    await withClient(server, async (client) => {
+      await expect(
+        client.callTool({ name: "list_frida_devices" }),
+      ).rejects.toThrow(/disabled/u);
+    });
+  });
+
+  it("reflects the scope in availability reports", () => {
+    const server = scopedServer(new Set(["session"]));
+    registerCatalog(server);
+    // Status reporting must not advertise a tool the registration disables.
+    expect(server.advertisesTool("open_binary")).toBe(true);
+    expect(server.advertisesTool("analyze_javascript_application")).toBe(false);
+    expect(server.advertisesTool("inspect_macho")).toBe(false);
+  });
+
+  it("advertises every tool in availability reports when no scope is set", () => {
+    const server = scopedServer(undefined);
+    registerCatalog(server);
+    for (const { name } of TOOL_CONTRACTS)
+      expect(server.advertisesTool(name)).toBe(true);
+  });
+});
