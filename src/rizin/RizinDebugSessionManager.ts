@@ -19,6 +19,10 @@ import type {
 import { createEvidence, type Evidence } from "../domain/evidence.js";
 import { err, ok, type Result } from "../domain/result.js";
 import {
+  verifyInferiorInputSink,
+  type InferiorInputSink,
+} from "../process/inferiorInputSink.js";
+import {
   ProviderProcessSupervisor,
   spawnOwnedProviderProcess,
   type SpawnedOwnedProviderProcess,
@@ -388,9 +392,19 @@ export class RizinDebugSessionManager {
       "-0",
       "-d",
       "-R",
+      `stdin=${ttyPath}`,
+      "-R",
       `stdout=${ttyPath}`,
       "-R",
       `stderr=${ttyPath}`,
+      // The debugger carries REA's ownership token; the inferior must see the
+      // caller's value (or none) so a later sweep cannot mistake it for an
+      // owned process.
+      "-R",
+      Object.hasOwn(this.#environment, "REA_PROCESS_RUN_ID") &&
+      this.#environment.REA_PROCESS_RUN_ID !== undefined
+        ? `setenv=REA_PROCESS_RUN_ID=${this.#environment.REA_PROCESS_RUN_ID}`
+        : "unsetenv=REA_PROCESS_RUN_ID",
       "-e",
       "dbg.exitkills=false",
       ...(input.backend === undefined ? [] : ["-D", input.backend]),
@@ -1152,11 +1166,13 @@ export class RizinDebugSessionManager {
     return session.stopAttempt;
   }
 
-  async #detachInferior(
-    session: RizinDebugSession,
-  ): Promise<
+  async #detachInferior(session: RizinDebugSession): Promise<
     | { readonly status: "no-inferior" }
-    | { readonly status: "detached"; readonly outputSink: "durable" }
+    | {
+        readonly status: "detached";
+        readonly outputSink: "durable";
+        readonly inputSink: InferiorInputSink;
+      }
   > {
     if (session.exited || session.protocolError !== undefined)
       throw new Error(
@@ -1173,11 +1189,13 @@ export class RizinDebugSessionManager {
     }
   }
 
-  async #detachInferiorUnlocked(
-    session: RizinDebugSession,
-  ): Promise<
+  async #detachInferiorUnlocked(session: RizinDebugSession): Promise<
     | { readonly status: "no-inferior" }
-    | { readonly status: "detached"; readonly outputSink: "durable" }
+    | {
+        readonly status: "detached";
+        readonly outputSink: "durable";
+        readonly inputSink: InferiorInputSink;
+      }
   > {
     if (session.exited || session.protocolError !== undefined)
       throw new Error(
@@ -1211,7 +1229,10 @@ export class RizinDebugSessionManager {
         );
       const [fd, pid] = inferior[0]!;
       const processStartTime = await readProcStartTime(pid);
-      await this.#verifyInferiorOutputConfiguration(session, pid);
+      const inputSink = await this.#verifyInferiorOutputConfiguration(
+        session,
+        pid,
+      );
       await this.#runInternalCommand(session, `o- ${fd}`);
       const after = parseRizinPtraceRows(
         await this.#runInternalCommand(session, "olj"),
@@ -1230,14 +1251,14 @@ export class RizinDebugSessionManager {
         await readProcStartTime(pid),
       );
       await this.#verifyInferiorOutputConfiguration(session, pid);
-      return { status: "detached", outputSink: "durable" };
+      return { status: "detached", outputSink: "durable", inputSink };
     }
   }
 
   async #verifyInferiorOutputConfiguration(
     session: RizinDebugSession,
     pid: string,
-  ): Promise<void> {
+  ): Promise<InferiorInputSink> {
     const exitKills = (
       await this.#runInternalCommand(session, "e dbg.exitkills")
     ).trim();
@@ -1257,6 +1278,11 @@ export class RizinDebugSessionManager {
           `Inferior descriptor ${descriptor} is not routed to the selected TTY.`,
         );
     }
+    return verifyInferiorInputSink(pid, {
+      path: session.inferiorTty,
+      dev: session.inferiorTtyDevice,
+      ino: session.inferiorTtyInode,
+    });
   }
 
   async #runInternalCommand(

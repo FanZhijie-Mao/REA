@@ -1160,6 +1160,47 @@ it("rejects a pre-cancelled GDB start and an unconfigured executable", async () 
   }
 });
 
+it("restores the caller's run ID for the inferior through a startup directive", async () => {
+  const seen: string[][] = [];
+  const spawn = async (options: OwnedProviderProcessSpawnOptions) => {
+    seen.push([...options.arguments]);
+    return createFakeSpawner().spawnProcess(options);
+  };
+  for (const [environment, expected] of [
+    [{}, "unset environment REA_PROCESS_RUN_ID"],
+    [
+      { REA_PROCESS_RUN_ID: "caller-run" },
+      "set environment REA_PROCESS_RUN_ID caller-run",
+    ],
+  ] as const) {
+    seen.length = 0;
+    const manager = new GdbSessionManager({
+      platform: "linux",
+      environment,
+      spawnProcess: spawn,
+    });
+    managers.push(manager);
+    await manager.start();
+    expect(seen[0]).toContain("-iex");
+    expect(seen[0]?.at(-1)).toBe(expected);
+  }
+});
+
+it("refuses a caller run ID that cannot be expressed as one directive", async () => {
+  const manager = new GdbSessionManager({
+    platform: "linux",
+    environment: { REA_PROCESS_RUN_ID: "a\nb" },
+    spawnProcess: async () => {
+      throw new Error("must not spawn");
+    },
+  });
+  managers.push(manager);
+
+  const started = await manager.start();
+
+  expect(started.ok).toBe(false);
+});
+
 it("retries MI2 after an MI3 process exits before its startup prompt", async () => {
   const provider = await createProvider(`
 if (process.argv.includes('--interpreter=mi3')) process.exit(0);
