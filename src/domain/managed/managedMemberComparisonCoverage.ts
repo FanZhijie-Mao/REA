@@ -3,6 +3,7 @@ import type {
   ManagedMemberComparisonSide,
 } from "./managedMemberComparison.js";
 import type { ManagedMemberInspection } from "./managedArtifact.js";
+import { resolvesSignatures } from "./managedMemberSignatureIdentity.js";
 
 interface ComparisonCoverageInput {
   readonly left: ManagedMemberInspection;
@@ -108,7 +109,7 @@ export const comparisonLimitations = (
   const limitations: string[] = [
     "Metadata tokens are build-local coordinates; matched pairs are remaps, not persistent identities.",
     "Methods pair within one declared type and name by exact CIL/signature, then signature, then structural shape; only then may exact CIL/signature or structural shape alone remap across declared types or names, never taking a member whose own declared type and name remain unpaired on the other side or whose declaring type is unresolved. Names alone are never a matching basis.",
-    "Fields pair by declared type, name, and signature, then remap by exact decoded signature alone under the same rule; an undecoded signature is compared only by its raw bytes, and an unmatched member with one stays unknown.",
+    "Fields pair by declared type, name, and signature, then remap by exact decoded signature alone under the same rule; an undecoded signature is compared only for an exact signature match, and an unmatched member with one stays unknown.",
   ];
   if (left.coverage.state !== "complete" || right.coverage.state !== "complete")
     limitations.push("At least one managed member observation is partial.");
@@ -119,6 +120,10 @@ export const comparisonLimitations = (
   else if (left.selection !== null)
     limitations.push(
       `Both observations cover only the selected declaring types (${left.selection.type_names.join(", ")}); member totals and statuses describe those types, not the whole assembly.`,
+    );
+  if (!resolvesSignatures(left) || !resolvesSignatures(right))
+    limitations.push(
+      "At least one managed member observation has no resolved signature digests, so signatures compare by raw bytes, which name types by build-local metadata row.",
     );
   if (left.exported_types === null || right.exported_types === null)
     limitations.push(

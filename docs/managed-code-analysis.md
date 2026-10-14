@@ -210,8 +210,8 @@ Names and semantic labels do not establish durable member identity. Comparison
 preserves observed differences, structural inferences, and unknowns separately.
 
 Cross-version matching first pairs members of the same declared type and name:
-methods by exact CIL/signature identity, then by raw signature, then by
-structural body shape; fields by raw signature. Exact CIL/signature identity
+methods by exact CIL/signature identity, then by signature, then by
+structural body shape; fields by signature. Exact CIL/signature identity
 requires equal raw CIL digests and decoded fingerprints. Equal decoded
 fingerprints alone cannot establish an exact match: they omit switch targets
 and collapse distinct NaN encodings. Only then may a remap pair a
@@ -224,18 +224,42 @@ type, so it pairs by name only when no other member shares its exact
 CIL/signature key, never by structural shape alone, and any remap group it
 joins stays ambiguous. The exact-signature key uses names only as part of that
 full tuple; names alone never select a pair. Duplicate tuples remain ambiguous
-rather than being paired by token order. The raw signature is exact whether or
+rather than being paired by token order. Every round compares signatures by
+`resolved_sha256`: the raw signature with each TypeDef or TypeRef operand
+replaced by a digest of that type's namespace and name, hashed as separate
+values so `A` + `B.C` differs from `A.B` + `C`, after its enclosing types for a
+nested type (`Outer/Inner`). The defining assembly is not part of the name:
+a TypeDef and a TypeRef with the same namespace and name compare as the
+same type, and a TypeRef's ResolutionScope assembly is ignored, so a type
+forwarded from one assembly to another still pairs. Two different types with
+the same full name in different assemblies therefore also compare equal.
+Nesting deeper than 64 levels is not named, and such a signature compares by
+its raw digest. Comparison keys keep resolved and raw digests apart, so a raw
+digest never pairs with an equal resolved one.
+Raw signature bytes name types by metadata row, and rows are build-local, so
+the same signature usually has different raw bytes in two builds. A signature
+that names no types resolves to its raw digest. When an operand cannot be
+resolved, such as a TypeSpec, or when REA could not parse the signature, the
+raw digest stands in. A TypeDef or TypeRef row that is in its table but cannot
+be read is reported as a coverage issue; an operand past its table is not,
+since member signature operands are not validated. When either observation was recorded before this field
+existed, both sides compare raw digests, which pair only where type rows agree,
+and the comparison reports that limitation. The signature is exact whether or
 not REA decoded it, so undecoded signatures pair by that tuple too, but they
 never enter structural rounds. An unmatched member is therefore reported as
 `unknown`, not added or removed, when its own signature was not decoded or when
 the other side has an unpaired member, one-sided or ambiguous, with the same
-declared type and name whose signature was not decoded.
+declared type and name whose signature was not decoded. When both observations
+carry resolved digests, a decoded signature that still compares by its raw
+digest is treated the same way: an unmatched member with one, or beside an
+unpaired same-named member with one, is `unknown`, because its raw bytes name
+types by build-local row.
 
 For a matched method, an unavailable or partial body makes body-shape facets
 unknown while preserving observed signature differences. For complete bodies,
 a difference in either the raw CIL digest or the decoded fingerprint is reported
 in the `cil` dimension, including reordered switch targets with equal decoded
-fingerprints. Structural identity compares normalized signatures, the limited
+fingerprints. Structural identity compares resolved signatures, the limited
 decoded-CIL tuple fingerprint,
 constants, and bounded shape context. It reports all candidates at the winning
 score and remains ambiguous when the evidence does not distinguish them. The

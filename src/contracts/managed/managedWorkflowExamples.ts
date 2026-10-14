@@ -88,6 +88,7 @@ const runtimeMembers = (): ManagedMemberInspection => {
         signature: {
           raw_length: 3,
           raw_sha256: "3".repeat(64),
+          resolved_sha256: "3".repeat(64),
           kind: "method",
           parse_status: "decoded",
           calling_convention: "default",

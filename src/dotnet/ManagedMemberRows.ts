@@ -17,6 +17,7 @@ import {
   type ManagedMemberRef,
   type ManagedMethod,
   type MemberCore,
+  type SignatureTypeName,
   type TypeRange,
 } from "./ManagedMemberInspectorCore.js";
 import {
@@ -47,7 +48,13 @@ export const parseFields = (
   bytes: Buffer,
   layout: ManagedMetadataLayout,
   ranges: readonly TypeRange[],
-  selected: SelectedTypeTokens = null,
+  {
+    signatureTypeName,
+    selected = null,
+  }: {
+    readonly signatureTypeName: SignatureTypeName;
+    readonly selected?: SelectedTypeTokens;
+  },
 ): {
   readonly fields: readonly ManagedField[];
   readonly core: ReadonlyMap<string, MemberCore>;
@@ -97,7 +104,7 @@ export const parseFields = (
         declaring_type: declared?.fullName ?? null,
         name,
         flags,
-        signature: budgetedSignature(sig, layout),
+        signature: budgetedSignature(sig, layout, signatureTypeName),
       });
     }, issues);
   }
@@ -179,6 +186,7 @@ export const parseMemberRefs = (
   bytes: Buffer,
   layout: ManagedMetadataLayout,
   typeName: (token: string | null) => string | null,
+  signatureTypeName: SignatureTypeName,
 ): {
   readonly refs: readonly ManagedMemberRef[];
   readonly core: ReadonlyMap<string, MemberCore>;
@@ -230,7 +238,7 @@ export const parseMemberRefs = (
         layout.rowCounts,
       );
       const parentName = typeName(parentToken);
-      const decoded = budgetedSignature(sig, layout);
+      const decoded = budgetedSignature(sig, layout, signatureTypeName);
       refs.push({
         token,
         row_offset: cursor.start,
@@ -256,6 +264,7 @@ interface ParseMethodsInput {
   readonly layout: ManagedMetadataLayout;
   readonly pe: ManagedPeLayout;
   readonly ranges: readonly TypeRange[];
+  readonly signatureTypeName: SignatureTypeName;
   readonly selected?: SelectedTypeTokens;
   readonly methodOffset?: number;
   readonly methodLimit?: number;
@@ -266,6 +275,7 @@ export const parseMethods = ({
   layout,
   pe,
   ranges,
+  signatureTypeName,
   selected = null,
   methodOffset = 0,
   methodLimit = Number.MAX_SAFE_INTEGER,
@@ -333,7 +343,7 @@ export const parseMethods = ({
         layout.blob.size,
       );
       cursor.readIndex(layout.tableIndexSize(8));
-      const decoded = budgetedSignature(sig, layout);
+      const decoded = budgetedSignature(sig, layout, signatureTypeName);
       core.set(token, {
         ...member,
         genericArity: signatureGenericArity(decoded),
@@ -475,12 +485,13 @@ const callerNameBytes = (method: ManagedMethod): number =>
 const budgetedSignature = (
   bytes: Buffer,
   layout: ManagedMetadataLayout,
+  signatureTypeName: SignatureTypeName,
 ): ReturnType<typeof signature> => {
   const budget = managedDecodeBudget(layout);
   budget.admitTransient(bytes.length * 256, layout.blob.offset);
   try {
     return admitManagedProjection(
-      signature(bytes, budget.digest(bytes, "sha256")),
+      signature(bytes, budget.digest(bytes, "sha256"), signatureTypeName),
       budget,
     );
   } finally {

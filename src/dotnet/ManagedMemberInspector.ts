@@ -29,6 +29,7 @@ import {
   type TypeRange,
 } from "./ManagedMemberInspectorCore.js";
 import { edgeTargets } from "./ManagedMethodSpecs.js";
+import { signatureTypeNames } from "./ManagedSignatureTypeNames.js";
 import { typeNameLookup } from "./ManagedTypeNames.js";
 import { parseUserStrings } from "./ManagedUserStrings.js";
 import {
@@ -197,11 +198,16 @@ export const inspectManagedMembersBytes = (
     appendManagedParseIssues(issues, parsedTypes.issues);
     const exportedTypes = parseExportedTypes(bytes, layout);
     appendManagedParseIssues(issues, exportedTypes.issues);
-    const fields = parseFields(bytes, layout, ranges, selected);
+    const signatureTypeName = signatureTypeNames(bytes, layout, issues);
+    const fields = parseFields(bytes, layout, ranges, {
+      signatureTypeName,
+      selected,
+    });
     const memberRefs = parseMemberRefs(
       bytes,
       layout,
       typeNameLookup(bytes, layout, ranges, issues),
+      signatureTypeName,
     );
     appendManagedParseIssues(issues, memberRefs.issues);
     const methods = parseMethods({
@@ -209,6 +215,7 @@ export const inspectManagedMembersBytes = (
       layout,
       pe,
       ranges,
+      signatureTypeName,
       selected,
       methodOffset,
       methodLimit,
