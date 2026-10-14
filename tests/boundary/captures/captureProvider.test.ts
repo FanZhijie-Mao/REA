@@ -1,7 +1,10 @@
 import { packetFieldsCatalogSchema } from "../../../src/domain/captures/packetFields.js";
 import { OwnedCommandFailure } from "../../../src/process/OwnedCommand.js";
+import { ArtifactAnalysisResources } from "../../../src/process/ArtifactAnalysisResources.js";
 import { it, expect, onTestFinished } from "vitest";
-import { writeFile, readdir, chmod, symlink } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
+import { writeFile, readdir, chmod, symlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { readStableArtifact } from "../../../src/artifacts/readStableArtifact.js";
 import { TsharkCaptureProvider } from "../../../src/captures/TsharkCaptureProvider.js";
@@ -675,4 +678,149 @@ it("preserves discovery resource ownership through CLI shutdown retries", async 
     f.allowCleanup();
     await f.service.close();
   }
+});
+
+it.each(["process", "workspace", "process-then-workspace"] as const)(
+  "reports only unresolved %s cleanup resources and retries their owner",
+  async (failure) => {
+    const directory = await createTestTempDirectory("rea-capture-retained-");
+    const root = join(directory, "workspace");
+    await mkdir(root);
+    const command = join(directory, "inert-tool");
+    const path = join(directory, "recording.pcap");
+    await writeFile(command, "inert fixture, never executed", { mode: 0o700 });
+    await writeFile(
+      path,
+      Buffer.from("d4c3b2a1020004000000000000000000ffff000001000000", "hex"),
+    );
+    let settled = false;
+    let processSettled = false;
+    let ownerCleanupSettled = false;
+    let runId = "";
+    let cleanupCalls = 0;
+    let rootCloses = 0;
+    let launches = 0;
+    const provider = new TsharkCaptureProvider(
+      { REA_TSHARK_COMMAND: command, REA_TSHARK_PRLIMIT_COMMAND: command },
+      async (spawn) => {
+        launches++;
+        runId = spawn.runId;
+        const handle = Object.assign(new EventEmitter(), {
+          pid: 4242,
+          stdout: null,
+          stderr: null,
+          exitCode: 0,
+          signalCode: null,
+          kill: () => {
+            throw new Error("No process signals allowed");
+          },
+        });
+        setTimeout(() => handle.emit("close", 0, null), 0);
+        return {
+          process: handle,
+          ownership: { runId, leaderPid: 4242, processGroupId: 4242 },
+          cleanup: async () => {
+            cleanupCalls++;
+            if (failure === "workspace" || processSettled || settled) {
+              ownerCleanupSettled = true;
+              return { cleaned: true as const, signaled: false };
+            }
+            return {
+              cleaned: false as const,
+              reason: "fixture observation unavailable",
+            };
+          },
+        };
+      },
+      async () => ({
+        path: root,
+        close: async () => {
+          expect(ownerCleanupSettled).toBe(true);
+          rootCloses++;
+          if (failure !== "process" && !settled)
+            throw new Error("workspace removal unavailable");
+        },
+      }),
+      "linux",
+      readStableArtifact,
+      async (limits) => limits,
+    );
+    const service = new PacketCaptureService(provider);
+    onTestFinished(async () => {
+      settled = true;
+      await service.close();
+    });
+    const result = await service.inspect({ path, fields: ["ip.addr"] });
+    if (result.ok) throw new Error("Expected cleanup failure");
+    const resources =
+      failure !== "workspace"
+        ? [runId, root, "pid:4242", "process-group:4242"]
+        : [root];
+    expect(projectAnalysisError(result.error)).toMatchObject({
+      code: "cleanup_incomplete",
+      details: { resources },
+    });
+    expect(launches).toBe(1);
+    expect(cleanupCalls).toBeGreaterThan(0);
+    if (failure !== "workspace") expect(rootCloses).toBe(0);
+    else expect(rootCloses).toBeGreaterThan(0);
+    const cleanupBeforeRetry = cleanupCalls;
+    await expect(service.close()).rejects.toMatchObject({
+      cleanupResources: resources,
+    });
+    if (failure !== "workspace") {
+      expect(cleanupCalls).toBeGreaterThan(cleanupBeforeRetry);
+      expect(rootCloses).toBe(0);
+    } else expect(cleanupCalls).toBe(cleanupBeforeRetry);
+    if (failure === "process-then-workspace") {
+      processSettled = true;
+      await expect(service.close()).rejects.toMatchObject({
+        cleanupResources: [root],
+      });
+      expect(ownerCleanupSettled).toBe(true);
+      expect(rootCloses).toBeGreaterThan(0);
+    }
+    const cleanupBeforeSettlement = cleanupCalls;
+    settled = true;
+    await service.close();
+    expect(rootCloses).toBeGreaterThan(0);
+    if (failure !== "process")
+      expect(cleanupCalls).toBe(cleanupBeforeSettlement);
+    const completedCleanupCalls = cleanupCalls;
+    const completedRootCloses = rootCloses;
+    await service.close();
+    expect(cleanupCalls).toBe(completedCleanupCalls);
+    expect(rootCloses).toBe(completedRootCloses);
+  },
+);
+
+it("preserves the public pending workspace paths through cleanup retries", async () => {
+  const directory = await createTestTempDirectory("rea-capture-path-view-");
+  let settled = false;
+  const resources = new ArtifactAnalysisResources(
+    "tshark",
+    "inspect_packet_capture",
+    readStableArtifact,
+    async (limits) => limits,
+    { message: "fixture capacity", details: {} },
+  );
+  const root = {
+    path: join(directory, "workspace"),
+    close: async () => {
+      if (!settled) throw new Error("workspace removal unavailable");
+    },
+  };
+  onTestFinished(async () => {
+    settled = true;
+    await resources.close();
+  });
+  resources.retain(root);
+  expect(resources.pendingPaths).toEqual([root.path]);
+  await expect(resources.release()).rejects.toMatchObject({
+    cleanupResources: [root.path],
+  });
+  expect(resources.pendingPaths).toEqual([root.path]);
+  settled = true;
+  await resources.release();
+  expect(resources.pendingPaths).toEqual([]);
 });
