@@ -2,6 +2,36 @@ import { expect, it } from "vitest";
 
 import { analyzeJavaScriptSemantics } from "./javascriptSemanticAnalysis.js";
 
+it.each([
+  `const port = Number(process.env.PORT);`,
+  `function run() { return process.argv[3].trim(); }`,
+  `const proc = require('node:process'); consume(proc.env.PORT);`,
+  `import proc from 'node:process'; consume(proc.argv[3]);`,
+])("retains a configuration slot when its value escapes: %s", (source) => {
+  expect(
+    analyzeJavaScriptSemantics(source).configurationOperations.map(
+      ({ kind, key }) => ({ kind, key }),
+    ),
+  ).toEqual([
+    {
+      kind: source.includes("argv") ? "argv" : "environment",
+      key: source.includes("argv") ? "3" : "PORT",
+    },
+  ]);
+});
+
+it.each([
+  `patch(process.env); Number(process.env.PORT);`,
+  `const proc = require('process'); patch(proc.argv); proc.argv[3].trim();`,
+  `function run() { process.env.PORT = 'other'; Number(process.env.PORT); }`,
+  `function run() { patch(process.env); consume(() => process.env.PORT); }`,
+  `patch(process.env); consume(process.env[key]);`,
+])("keeps containing-object escapes and writes uncertain: %s", (source) => {
+  expect(analyzeJavaScriptSemantics(source).configurationOperations).toEqual(
+    [],
+  );
+});
+
 it("shares required process writes with globals while keeping earlier observations", () => {
   const ir = analyzeJavaScriptSemantics(`const proc=require('process');
     process.cwd(); const before=proc.env.BEFORE;

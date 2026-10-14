@@ -1,4 +1,5 @@
 import type { ElectronStaticFindings } from "./electronStaticAnalysisTypes.js";
+import type { JavaScriptModuleResolutionMode } from "./javascriptModuleResolutionMode.js";
 
 /** Token semantics shared by bundle producers and worker admission. */
 export const JAVASCRIPT_AST_FINGERPRINT_ALGORITHM = "babel-ast-v2";
@@ -21,6 +22,8 @@ export interface JavaScriptSourceRange {
 }
 
 interface JavaScriptStaticReferenceState {
+  /** Explicit selector evidence; omitted when the source format owns the default. */
+  readonly resolutionMode?: JavaScriptModuleResolutionMode;
   readonly kind:
     | "static-import"
     | "dynamic-import"

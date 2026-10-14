@@ -148,8 +148,8 @@ it("associates each source-map URL with its edge when aliases share one physical
       };
     }),
   ).toEqual([
-    { declared_url: "app.js.map", resolved_path: "dist/app.js.map" },
     { declared_url: "./app.js.map", resolved_path: "dist/app.js.map" },
+    { declared_url: "app.js.map", resolved_path: "dist/app.js.map" },
   ]);
 });
 
@@ -191,6 +191,7 @@ it("resolves a bare source-map file name and worker URL next to the script", asy
       .update("app.js.map")
       .digest("hex"),
     resolved_path: "dist/app.js.map",
+    resolution_status: "resolved",
   });
   expect(
     nodes

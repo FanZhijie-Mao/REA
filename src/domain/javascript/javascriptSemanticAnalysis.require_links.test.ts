@@ -34,25 +34,16 @@ describe("TypeScript import-equals links", () => {
     const source = 'export import dependency = require("./dependency");';
     const links = analyzeJavaScriptSemantics(source).moduleLinks;
 
-    expect(links).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "require",
-          specifier: "./dependency",
-          localName: "dependency",
-          exportedName: null,
-        }),
-        expect.objectContaining({
-          kind: "export",
-          specifier: null,
-          localName: "dependency",
-          exportedName: "dependency",
-        }),
-      ]),
-    );
-    expect(
-      links.find(({ kind }) => kind === "require")?.location.start,
-    ).toEqual({ line: 1, column: 7 });
+    expect(links).toEqual([
+      expect.objectContaining({
+        kind: "re-export",
+        specifier: "./dependency",
+        localName: "dependency",
+        exportedName: "dependency",
+        resolutionMode: "require",
+      }),
+    ]);
+    expect(links[0]?.location.start).toEqual({ line: 1, column: 0 });
   });
 });
 
@@ -104,6 +95,10 @@ describe("TypeScript type-only module links", () => {
     expect(ir.limitations).toContain(
       "Compiler options are unavailable; inline type-only imports or re-exports may preserve a module side-effect dependency.",
     );
+    for (const link of ir.moduleLinks.filter(
+      ({ specifier }) => specifier === null,
+    ))
+      expect(link).not.toHaveProperty("resolutionMode");
   });
 });
 

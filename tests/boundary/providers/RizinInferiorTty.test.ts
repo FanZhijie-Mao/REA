@@ -195,7 +195,7 @@ it.skipIf(process.platform !== "linux").each([
     const provider = join(testDirectory, "fake-rizin.cjs");
     await writeFile(
       provider,
-      `#!/usr/bin/env node
+      `#!${process.execPath}
 process.stdout.write("\\0");
 let oljCalls = 0;
 let input = "";
@@ -544,7 +544,7 @@ async function startFakeInferiorSession(
   const stderrPath = options.stderrPath ?? tty;
   await writeFile(
     provider,
-    `#!/usr/bin/env node
+    `#!${process.execPath}
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 process.stdout.write("\\0");

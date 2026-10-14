@@ -57,6 +57,24 @@ it("retains empty literal evidence across the application boundary surfaces", as
     "const { contextBridge } = require('electron'); contextBridge.exposeInMainWorld('', {});",
   ];
   const output = await analyzeSource(sources.join("\n"));
+  const endpointFacts = output.graph.nodes
+    .filter(({ kind }) => kind === "endpoint")
+    .flatMap(({ observations }) => observations);
+  expect(endpointFacts).toContainEqual(
+    expect.objectContaining({
+      properties: {
+        endpoint_kind: "network",
+        value: "",
+        mechanism: "call:app.get",
+        interpretation: "candidate",
+      },
+    }),
+  );
+  const knownEndpoint = endpointFacts.find(
+    ({ properties }) => properties.mechanism === "call:fetch",
+  );
+  expect(knownEndpoint).toBeDefined();
+  expect(knownEndpoint?.properties).not.toHaveProperty("interpretation");
   expect(output.graph.nodes).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ kind: "endpoint" }),
@@ -144,7 +162,7 @@ it("analyzes a plain long-line loader without package metadata", async () => {
   for (const node of nodes) {
     expect(node.identity).toMatchObject({
       strategy: "artifact-local-key",
-      key: "",
+      key: node.kind === "endpoint" ? '["literal",""]' : "",
     });
     expect(node.observations.map(({ label }) => label)).toEqual([null]);
   }
@@ -165,9 +183,9 @@ it("keeps exact values for empty literals without synthetic application labels",
   // a literal two-quote endpoint; both keep exact identities.
   expect(endpoints).toEqual(
     expect.arrayContaining([
-      { key: "", labels: [null], values: [""] },
-      { key: '""', labels: ['""'], values: ['""'] },
-      { key: "/api", labels: ["/api"], values: ["/api"] },
+      { key: '["literal",""]', labels: [null], values: [""] },
+      { key: '["literal","\\\"\\\""]', labels: ['""'], values: ['""'] },
+      { key: '["literal","/api"]', labels: ["/api"], values: ["/api"] },
     ]),
   );
   expect(endpoints).toHaveLength(3);
@@ -252,7 +270,7 @@ it("does not match an empty endpoint with a literal two-quote seed", async () =>
     case_sensitive: true,
   }).filter(({ node_id: nodeId }) => endpoints.has(nodeId));
   expect(matches.map(({ node_id: nodeId }) => endpoints.get(nodeId))).toEqual([
-    '""',
+    '["literal","\\\"\\\""]',
   ]);
 });
 

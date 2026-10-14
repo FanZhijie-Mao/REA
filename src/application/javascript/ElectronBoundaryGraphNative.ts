@@ -2,10 +2,13 @@ import type { ElectronNativeAddonBindingFinding } from "../../domain/javascript/
 import type { JavaScriptArtifactFile } from "../../domain/javascript/javascriptArtifactFiles.js";
 import {
   javascriptAnalysisCoverage,
-  resolveArtifactPath,
   type JavaScriptArtifactGraphContext,
   type JavaScriptArtifactGraphCoverage,
 } from "./JavaScriptArtifactGraphContext.js";
+import {
+  resolveArtifactPathByContext,
+  artifactPathResolutionProperties,
+} from "./JavaScriptArtifactPathResolution.js";
 import { astObservationEvidence } from "./JavaScriptArtifactGraphEvidence.js";
 import { compositeKey } from "../../domain/unicodeCodePointOrder.js";
 import { javascriptDisplayText } from "../../domain/javascript/javascriptAstValues.js";
@@ -45,14 +48,54 @@ const addNativeBinding = (input: NativeBindingInput): void => {
     value.module_runtime,
   );
   if (source === undefined) return;
-  const resolved = resolveArtifactPath(
-    value.specifier,
-    file.path,
-    context.filesByPath,
-    value.module_kind,
-    context.directoryPaths,
-  );
+  const resolution = resolveArtifactPathByContext({
+    declaredPath: value.specifier,
+    sourcePath: file.path,
+    files: context.filesByPath,
+    directoryPaths: context.directoryPaths,
+    context: "module-specifier",
+    moduleKind: value.module_kind,
+  });
+  const resolved = resolution.resolved_path;
   const addon = resolved === null ? undefined : context.fileNodes.get(resolved);
+  const observations = [
+    {
+      label:
+        value.members.map(javascriptDisplayText).join(", ") || value.specifier,
+      properties: {
+        specifier: value.specifier,
+        binding_kind: value.binding_kind,
+        module_kind: value.module_kind,
+        type_only: value.type_only ?? null,
+        requested_members: value.members,
+        namespace_access: value.namespace_access ?? null,
+        dynamic_member_access: value.dynamic_member_access ?? null,
+        resolved_path: resolved,
+        resolution_status: resolution.resolution_status,
+        resolution_limitations: resolution.limitations,
+        ...artifactPathResolutionProperties(resolution),
+        native_export_verification: "not-performed",
+      },
+      evidence: astObservationEvidence({
+        sha256: file.sha256,
+        path: file.path,
+        range: value.location,
+        operation: "observe-native-addon-binding",
+        coverage,
+        limitations: [
+          "JavaScript syntax identifies requested member names; it does not prove that the native binary exports or implements them.",
+        ],
+      }),
+    },
+  ];
+  if (value.type_only !== false) {
+    context.accumulator.addNode({
+      kind: source.kind,
+      identity: source.identity,
+      observations,
+    });
+    return;
+  }
   const binding = context.accumulator.addNode({
     kind: "native-export",
     identity: electronObservationIdentity(
@@ -68,32 +111,7 @@ const addNativeBinding = (input: NativeBindingInput): void => {
         electronRangeKey(value.location),
       ]),
     ),
-    observations: [
-      {
-        label:
-          value.members.map(javascriptDisplayText).join(", ") ||
-          value.specifier,
-        properties: {
-          specifier: value.specifier,
-          binding_kind: value.binding_kind,
-          requested_members: value.members,
-          namespace_access: value.namespace_access ?? null,
-          dynamic_member_access: value.dynamic_member_access ?? null,
-          resolved_path: resolved,
-          native_export_verification: "not-performed",
-        },
-        evidence: astObservationEvidence({
-          sha256: file.sha256,
-          path: file.path,
-          range: value.location,
-          operation: "observe-native-addon-binding",
-          coverage,
-          limitations: [
-            "JavaScript syntax identifies requested member names; it does not prove that the native binary exports or implements them.",
-          ],
-        }),
-      },
-    ],
+    observations,
   });
   addElectronInferenceEdge(context, {
     source,
@@ -106,6 +124,8 @@ const addNativeBinding = (input: NativeBindingInput): void => {
     properties: {
       specifier: value.specifier,
       binding_kind: value.binding_kind,
+      module_kind: value.module_kind,
+      type_only: false,
       requested_members: value.members,
       namespace_access: value.namespace_access ?? null,
       dynamic_member_access: value.dynamic_member_access ?? null,
@@ -125,6 +145,7 @@ const addNativeBinding = (input: NativeBindingInput): void => {
     operation: "associate-native-addon-requested-exports",
     properties: {
       resolved_path: resolved,
+      type_only: false,
       requested_members: value.members,
       namespace_access: value.namespace_access ?? null,
       dynamic_member_access: value.dynamic_member_access ?? null,

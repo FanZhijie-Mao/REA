@@ -31,6 +31,21 @@ it("does not request native-addon members from erased TypeScript names", async (
   const typeImport = await analyzeFixture(
     'import type { NativeThing } from "./addon.node";',
   );
+  expect(
+    typeImport.graph.nodes.flatMap((node) => node.observations),
+  ).toContainEqual(
+    expect.objectContaining({
+      properties: expect.objectContaining({
+        type_only: true,
+        requested_members: ["NativeThing"],
+      }),
+      evidence: expect.objectContaining({
+        location: expect.objectContaining({
+          value: expect.objectContaining({ source: "main.ts" }),
+        }),
+      }),
+    }),
+  );
   expect(typeImport.summary.native_addon_bindings).toBe(0);
   expect(typeImport.summary.resolved_native_addon_bindings).toBe(0);
   expect(

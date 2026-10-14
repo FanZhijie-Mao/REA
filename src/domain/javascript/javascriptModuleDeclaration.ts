@@ -1,14 +1,52 @@
 import * as t from "@babel/types";
+import { traverseJavaScriptAst } from "./javascriptSemanticTraversal.js";
+
+const erasedModuleDeclarations = new WeakSet<t.Node>();
+
+/** Retain parser-owned erasure context without changing syntax or source spans. */
+export const recordTypeScriptModuleErasure = (
+  program: t.Program,
+  declarationFile: boolean,
+): void => {
+  traverseJavaScriptAst(program, {
+    enter: (node, _parent, readAncestors) => {
+      if (
+        !t.isImportDeclaration(node) &&
+        !t.isExportNamedDeclaration(node) &&
+        !t.isExportAllDeclaration(node) &&
+        !t.isTSImportEqualsDeclaration(node)
+      )
+        return;
+      if (
+        declarationFile ||
+        readAncestors().some(
+          (ancestor) =>
+            t.isTSModuleDeclaration(ancestor) &&
+            (ancestor.declare === true || t.isStringLiteral(ancestor.id)),
+        )
+      )
+        erasedModuleDeclarations.add(node);
+    },
+  });
+};
+
+/** Erasure established by a declaration file or enclosing ambient module. */
+export const isErasedTypeScriptModuleDeclaration = (node: t.Node): boolean =>
+  erasedModuleDeclarations.has(node);
 
 /** Whether TypeScript explicitly erases this entire import declaration. */
 export const isTypeOnlyImportDeclaration = (
   node: t.ImportDeclaration,
-): boolean => node.importKind === "type" || node.importKind === "typeof";
+): boolean =>
+  isErasedTypeScriptModuleDeclaration(node) ||
+  node.importKind === "type" ||
+  node.importKind === "typeof";
 
 /** Whether TypeScript explicitly erases this entire export declaration. */
 export const isTypeOnlyExportDeclaration = (
   node: t.ExportNamedDeclaration | t.ExportAllDeclaration,
 ): boolean =>
+  isErasedTypeScriptModuleDeclaration(node) ||
   node.exportKind === "type" ||
   (t.isExportNamedDeclaration(node) &&
     node.declaration !== null &&

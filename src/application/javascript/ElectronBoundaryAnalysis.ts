@@ -3,6 +3,7 @@ import type { ElectronIpcFinding } from "../../domain/javascript/electronStaticA
 import type { ElectronBoundarySummary } from "../../domain/javascript/javascriptApplicationAnalysis.js";
 import type { JavaScriptModuleArtifactAnalysis } from "./JavaScriptArtifactAnalysisTypes.js";
 import type { JavaScriptArtifactFile } from "../../domain/javascript/javascriptArtifactFiles.js";
+import type { JavaScriptModuleResolutionMode } from "../../domain/javascript/javascriptModuleResolutionMode.js";
 import {
   resolveArtifactPathByContext,
   type ResolveArtifactPathInput,
@@ -105,10 +106,12 @@ export const summarizeElectronBoundaries = (
     })),
   );
   const nativeBindings = analysis.files.flatMap(({ file, javascript: value }) =>
-    (value?.electron.native_addon_bindings ?? []).map((finding) => ({
-      file,
-      finding,
-    })),
+    (value?.electron.native_addon_bindings ?? [])
+      .filter((finding) => finding.type_only === false)
+      .map((finding) => ({
+        file,
+        finding,
+      })),
   );
   const ipc = collectElectronIpcRecords(analysis);
   const pairing = classifyElectronIpcPairings(ipc);
@@ -211,7 +214,7 @@ interface ResolveToFileInput {
   readonly files: ReadonlyMap<string, JavaScriptArtifactFile>;
   readonly directoryPaths?: ReadonlySet<string> | undefined;
   readonly kind?: JavaScriptArtifactFile["kind"];
-  readonly moduleKind?: "import" | "require";
+  readonly moduleKind?: JavaScriptModuleResolutionMode;
   readonly runtimePathKind?: ResolveArtifactPathInput["runtimePathKind"];
 }
 

@@ -11,6 +11,13 @@ import { parseEvidence } from "../../../../src/domain/evidence.js";
 import { parseJavaScriptApplicationGraph } from "../../../../src/domain/javascript/javascriptApplicationGraph.js";
 import { analyzeJavaScriptApplicationInputSchema } from "../../../../src/domain/javascript/javascriptApplicationAnalysis.js";
 import { writeElectronBoundaryFixture } from "../../../fixtures/electronBoundaryApplication.js";
+import { scanCanonicalArtifactInventory } from "../../../fixtures/artifactInventory.js";
+import { readJavaScriptArtifactFiles } from "../../../support/javascriptApplicationScope.js";
+import { createJavaScriptArtifactReader } from "../../../../src/artifacts/javascript/JavaScriptArtifactReader.js";
+import { analyzeJavaScriptArtifactFiles } from "../../../../src/application/javascript/JavaScriptArtifactAnalysis.js";
+import { buildJavaScriptArtifactGraph } from "../../../../src/application/javascript/JavaScriptArtifactGraphBuilder.js";
+import { summarizeElectronBoundaries } from "../../../../src/application/javascript/ElectronBoundaryAnalysis.js";
+import { javaScriptWorkerStaticAnalysisSchema } from "../../../../src/javascript/analysis/JavaScriptAnalysisWorkerSchemas.js";
 
 describe("static Electron application analysis", () => {
   it("accepts relative paths and rejects caller-selected analysis bounds", () => {
@@ -77,6 +84,8 @@ describe("static Electron application analysis", () => {
 
     const result = await reconstructJavaScriptArtifact({ input_path: root });
     const graph = parseJavaScriptApplicationGraph(result.graph);
+    // Computed access keeps no known members; the unknown access is an
+    // explicit dynamic flag rather than a "*" sentinel inside members.
     const nativeBindings = graph.nodes.filter(
       (node) => node.kind === "native-export",
     );
@@ -86,6 +95,19 @@ describe("static Electron application analysis", () => {
       native_addon_bindings: 1,
       resolved_native_addon_bindings: 1,
     });
+    expect(
+      graph.nodes
+        .flatMap(({ kind, observations }) =>
+          kind === "javascript-asset" ? observations : [],
+        )
+        .filter(({ properties }) => properties.type_only === true),
+    ).toHaveLength(3);
+    expect(
+      graph.nodes
+        .filter(({ kind }) => kind === "native-export")
+        .flatMap(({ observations }) => observations)
+        .every(({ properties }) => properties.type_only === false),
+    ).toBe(true);
     expect(nativeBindings).toMatchObject([
       {
         observations: [
@@ -95,6 +117,7 @@ describe("static Electron application analysis", () => {
               namespace_access: false,
               dynamic_member_access: true,
               native_export_verification: "not-performed",
+              type_only: false,
             },
           },
         ],
@@ -160,6 +183,98 @@ describe("static Electron application analysis", () => {
       Reflect.get(globalThis, "__rea_electron_fixture_executed"),
     ).toBeUndefined();
   });
+});
+
+it("keeps omitted native categories unknown through legacy worker decoding and graph projection", async () => {
+  const root = await computedMemberFixtureDirectory();
+  const snapshot = await scanCanonicalArtifactInventory(root, {});
+  const reader = createJavaScriptArtifactReader(root, "directory");
+  try {
+    const files = await readJavaScriptArtifactFiles(reader, snapshot);
+    const analysis = analyzeJavaScriptArtifactFiles(files);
+    expect(summarizeElectronBoundaries(analysis)).toMatchObject({
+      native_addon_bindings: 1,
+      resolved_native_addon_bindings: 1,
+    });
+    const legacy = {
+      ...analysis,
+      files: analysis.files.map((file) => {
+        if (file.javascript === null) return file;
+        const payload = {
+          ...file.javascript,
+          electron: {
+            ...file.javascript.electron,
+            native_addon_bindings:
+              file.javascript.electron.native_addon_bindings.map(
+                ({ type_only, ...finding }) =>
+                  type_only === false ? finding : { ...finding, type_only },
+              ),
+          },
+        };
+        return {
+          ...file,
+          javascript: javaScriptWorkerStaticAnalysisSchema.parse(
+            JSON.parse(JSON.stringify(payload)),
+          ),
+        };
+      }),
+    };
+    const graph = buildJavaScriptArtifactGraph(snapshot, files, legacy);
+    const observations = graph.nodes.flatMap(({ kind, observations }) =>
+      kind === "javascript-asset" ? observations : [],
+    );
+    expect(
+      observations.filter(({ properties }) => properties.type_only === null),
+    ).toHaveLength(1);
+    expect(
+      observations.filter(({ properties }) => properties.type_only === true),
+    ).toHaveLength(3);
+    expect(graph.nodes.filter(({ kind }) => kind === "native-export")).toEqual(
+      [],
+    );
+    for (const { file, javascript } of legacy.files) {
+      for (const finding of javascript?.electron.native_addon_bindings ?? []) {
+        const source = graph.nodes.find(
+          ({ kind, identity }) =>
+            kind === "javascript-asset" &&
+            identity.strategy === "content-digest" &&
+            identity.sha256 === file.sha256,
+        );
+        expect(source?.observations).toContainEqual(
+          expect.objectContaining({
+            properties: expect.objectContaining({
+              type_only: finding.type_only ?? null,
+              requested_members: finding.members,
+              native_export_verification: "not-performed",
+            }),
+            evidence: expect.objectContaining({
+              artifact: expect.objectContaining({ sha256: file.sha256 }),
+              location: {
+                available: true,
+                value: {
+                  kind: "source-range",
+                  source: file.path,
+                  ...finding.location,
+                },
+              },
+            }),
+          }),
+        );
+      }
+    }
+    expect(
+      graph.edges.filter(
+        ({ evidence }) =>
+          evidence.extractor.operation === "map-native-addon-binding",
+      ),
+    ).toEqual([]);
+    expect(summarizeElectronBoundaries(legacy)).toMatchObject({
+      native_addon_bindings: 0,
+      resolved_native_addon_bindings: 0,
+    });
+  } finally {
+    await reader.close();
+  }
 });
 
 const exactRuntimeEntrypointFixture = async (): Promise<void> => {
@@ -652,6 +767,14 @@ module.exports = { selected, validate };
 `,
     ),
     writeFile(join(root, "native", "addon.node"), Buffer.from([0, 1, 2, 3])),
+    writeFile(
+      join(root, "types.mts"),
+      [
+        'import type { Api } from "./native/addon.node";',
+        'export type { Api } from "./native/addon.node";',
+        'type Inline = import("./native/addon.node").Api;',
+      ].join("\n"),
+    ),
   ]);
   return root;
 };

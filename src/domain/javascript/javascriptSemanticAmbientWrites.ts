@@ -16,7 +16,7 @@ import {
   type JavaScriptSemanticAnalysisState,
 } from "./javascriptSemanticState.js";
 import { isImportMetaUrl } from "./javascriptStaticAnalysisHelpers.js";
-import { semanticMutationInitializers } from "./javascriptSemanticMutationInitializers.js";
+import { semanticReadInitializers } from "./javascriptSemanticMutationInitializers.js";
 
 const GLOBAL_OBJECT_NAMES = ["globalThis", "global", "window", "self"];
 
@@ -44,15 +44,16 @@ type AmbientProjection = AmbientPath | undefined;
 
 /**
  * Follow local object identities without equating shallow copies with their
- * sources. Write lookup retains every visible initializer: reassigning an alias
- * later cannot erase a possible earlier mutation. Intrinsic reads stay strict.
+ * sources. Each alias hop uses the initializer visible at that hop's read:
+ * a later reassignment cannot rewrite an earlier captured identity. Intrinsic
+ * reads stay strict; uncertain activations retain all possible initializers.
  */
 const createAmbientPathResolver = (
   state: JavaScriptSemanticAnalysisState,
   possibleWrites: boolean,
 ) => {
   const cached = new WeakMap<t.Node, readonly AmbientPath[]>();
-  return (node: t.Node, capture?: t.Node): readonly AmbientPath[] => {
+  return (node: t.Node): readonly AmbientPath[] => {
     const prior = possibleWrites ? undefined : cached.get(node);
     if (prior !== undefined) return prior;
     const result = new Map<string, AmbientPath>();
@@ -127,13 +128,8 @@ const createAmbientPathResolver = (
         if (binding === undefined) continue;
         const stable = semanticStableInitializer(binding, state);
         const initializers = possibleWrites
-          ? capture === undefined
-            ? binding.initializers
-            : semanticMutationInitializers(
-                binding,
-                capture,
-                state.parentsByNode,
-              ).initializers
+          ? semanticReadInitializers(binding, root, state.parentsByNode)
+              .initializers
           : stable === undefined
             ? []
             : [stable];
@@ -255,7 +251,7 @@ export function* indexJavaScriptAmbientWritesSteps(
   });
   yield* collectJavaScriptIdentityWritesSteps(
     program,
-    (root, kind, writeSite) => {
+    (root, kind) => {
       if (kind === "opaque-call") return [];
       // Reassigning a local alias changes the binding, not the referenced object.
       if (kind === "binding")
@@ -263,7 +259,7 @@ export function* indexJavaScriptAmbientWritesSteps(
           isUnshadowedGlobal(root, state, root.name)
           ? [["global", root.name]]
           : [];
-      return ambientWrites(root, writeSite);
+      return ambientWrites(root);
     },
     interop.intrinsicInvocation,
     interop.staticString,

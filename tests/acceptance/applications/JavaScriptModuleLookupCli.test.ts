@@ -1,14 +1,70 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import { expect } from "vitest";
 
+import {
+  modeSourceFiles,
+  modePackageFiles,
+  expectReviewModeEvidence,
+} from "../../fixtures/javascriptModuleResolutionModes.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
 import { analyzeJavaScriptDirectory } from "../../support/cli/javascriptApplication.js";
 import { writeFixtureFiles } from "../../support/javascriptApplicationFixture.js";
 
 const execute = promisify(execFile);
+const requireFixture = createRequire(import.meta.url);
+const compiler = join(
+  dirname(requireFixture.resolve("typescript/package.json")),
+  "bin",
+  "tsc",
+);
+const ctsSource = [
+  'import value from "./runtime-dep";',
+  'import { marker } from "cts-package";',
+  'export { marker as retainedMarker } from "cts-package";',
+  "console.log(JSON.stringify([value, marker]));",
+  'void import("cts-package").then(({ marker }) => console.log(marker));',
+].join("\n");
+const ctsResolutionSource = [
+  'import type { ImportOnly } from "cts-package" with { "resolution-mode": "import" };',
+  'import type { RequireOnly } from "cts-package" with { "resolution-mode": "require" };',
+  "export type { ImportOnly, RequireOnly };",
+  'const first: ImportOnly = { source: "import" };',
+  'const second: RequireOnly = { source: "require" };',
+  "console.log(JSON.stringify([first.source, second.source]));",
+].join("\n");
+const ctsReexportSource = [
+  'export type { ImportOnly as DirectImportOnly } from "cts-package" with { "resolution-mode": "import" };',
+  'export type * from "cts-package" with { "resolution-mode": "import" };',
+  'export type * as Types from "cts-package" with { "resolution-mode": "import" };',
+].join("\n");
+const ctsSourceFiles = {
+  "cts/package.json": JSON.stringify({ type: "commonjs" }),
+  "cts/entry.cts": ctsSource,
+  "cts/resolution.cts": ctsResolutionSource,
+  "cts/reexport.cts": ctsReexportSource,
+  "cts/runtime-dep.js": "module.exports = 42;",
+  ...modeSourceFiles,
+};
+const ctsPackageFiles = {
+  "node_modules/cts-package/package.json": JSON.stringify({
+    exports: { require: "./actual.cjs", import: "./decoy.mjs" },
+  }),
+  "node_modules/cts-package/actual.cjs": "exports.marker = 43;",
+  "node_modules/cts-package/actual.d.cts":
+    'export const marker: number; export interface RequireOnly { source: "require"; }',
+  "node_modules/cts-package/decoy.mjs": "export const marker = 99;",
+  "node_modules/cts-package/decoy.d.mts":
+    'export const marker: number; export interface ImportOnly { source: "import"; } export namespace Shapes { interface ImportOnly { source: "nested-import"; } }',
+  ...modePackageFiles,
+};
 
 const createModuleLookupFixture = async () => {
   const root = await createTestTempDirectory("rea-module-lookup-");
@@ -17,6 +73,8 @@ const createModuleLookupFixture = async () => {
       name: "module-lookup-fixture",
       type: "commonjs",
     }),
+    ...ctsPackageFiles,
+    ...ctsSourceFiles,
     "esm/entry.mjs": [
       'import "./a%2eb.mjs";',
       'import "./sub/%2e%2e/x.mjs";',
@@ -137,6 +195,296 @@ const createModuleLookupFixture = async () => {
   return root;
 };
 
+const expectErasedNativeDeclarationRuntime = async (
+  root: string,
+  emitted: string,
+): Promise<void> => {
+  // The ambient-module control has script context rather than augmentation context.
+  await execute(
+    process.execPath,
+    [
+      compiler,
+      "--module",
+      "NodeNext",
+      "--moduleResolution",
+      "NodeNext",
+      "--moduleDetection",
+      "legacy",
+      "--target",
+      "ES2022",
+      "--skipLibCheck",
+      "--rootDir",
+      join(root, "cts"),
+      "--outDir",
+      emitted,
+      join(root, "cts/native-ambient.ts"),
+    ],
+    { cwd: root, timeout: 10_000 },
+  );
+  const emittedNames = await readdir(emitted);
+  for (const name of [
+    "native-declaration.cjs",
+    "native-declaration.mjs",
+    "native-declaration.js",
+    "native-declaration-values.mjs",
+  ])
+    expect(emittedNames).not.toContain(name);
+  expect(
+    await readFile(join(emitted, "native-ambient.js"), "utf8"),
+  ).not.toContain("native-mode/addon.node");
+  const ambientRuntime = await execute(
+    process.execPath,
+    ["-e", 'console.log(JSON.stringify(require("./native-ambient.js")))'],
+    { cwd: emitted, timeout: 10_000 },
+  );
+  expect(ambientRuntime.stdout.trim()).toBe("{}");
+};
+
+const expectInvalidCtsResolution = async (root: string): Promise<void> => {
+  for (const [file, diagnostic] of [
+    ["cts/unresolved.cts", "TS2307"],
+    ["cts/invalid-local-export.mts", "TS1454"],
+  ] as const) {
+    await expect(
+      execute(
+        process.execPath,
+        [
+          compiler,
+          "--module",
+          "NodeNext",
+          "--moduleResolution",
+          "NodeNext",
+          "--skipLibCheck",
+          "--noEmit",
+          join(root, file),
+        ],
+        { cwd: root, timeout: 10_000 },
+      ),
+    ).rejects.toMatchObject({
+      code: 1,
+      stdout: expect.stringContaining(diagnostic),
+    });
+  }
+};
+
+const expectCtsRuntime = async (root: string): Promise<void> => {
+  const emitted = await createTestTempDirectory("rea-cts-module-output-");
+  await writeFixtureFiles(emitted, {
+    ...ctsPackageFiles,
+    "package.json": JSON.stringify({ type: "commonjs" }),
+  });
+  await execute(
+    process.execPath,
+    [
+      compiler,
+      "--module",
+      "NodeNext",
+      "--moduleResolution",
+      "NodeNext",
+      "--target",
+      "ES2022",
+      "--skipLibCheck",
+      "--allowJs",
+      "--checkJs",
+      "--rootDir",
+      join(root, "cts"),
+      "--outDir",
+      emitted,
+      join(root, "cts/entry.cts"),
+      join(root, "cts/resolution.cts"),
+      join(root, "cts/import-equals-local.mts"),
+      join(root, "cts/reexport.cts"),
+      join(root, "cts/inline.cts"),
+      join(root, "cts/script.ts"),
+      join(root, "cts/same.cts"),
+      join(root, "cts/native.mts"),
+      join(root, "cts/native-jsdoc.mjs"),
+      join(root, "cts/native-jsdoc.cjs"),
+      join(root, "cts/native-jsdoc-star.mjs"),
+      join(root, "cts/native-jsdoc-star.d.ts"),
+      join(root, "cts/native-template.mts"),
+      join(root, "cts/native-parenthesized.mts"),
+      join(root, "cts/native-default.cts"),
+      join(root, "cts/native-default.mts"),
+      join(root, "cts/native-default.ts"),
+      join(root, "cts/native-mixed.mts"),
+      join(root, "cts/native-inline-only.mts"),
+      join(root, "cts/native-import-equals.cts"),
+      join(root, "cts/native-import-equals.mts"),
+      join(root, "cts/native-indexed.mts"),
+      join(root, "cts/native-commented-omission.cts"),
+      join(root, "cts/native-nested.d.cts"),
+      join(root, "cts/native-export-equals.cts"),
+      join(root, "cts/native-declaration.d.cts"),
+      join(root, "cts/native-declaration.d.mts"),
+      join(root, "cts/native-declaration.d.ts"),
+      join(root, "cts/native-declaration-values.d.mts"),
+      join(root, "cts/native-export-type-equals.cts"),
+      join(root, "cts/runtime-dep.js"),
+    ],
+    { cwd: root, timeout: 10_000 },
+  );
+  await expectErasedNativeDeclarationRuntime(root, emitted);
+  for (const [file, expected] of [
+    ["native-jsdoc.mjs", '["require","import","import","require","import"]'],
+    ["native-jsdoc.cjs", '["import","require"]'],
+    ["native-jsdoc-star.mjs", '"require"'],
+  ] as const) {
+    const runtime = await execute(process.execPath, [join(emitted, file)], {
+      cwd: emitted,
+      timeout: 5_000,
+    });
+    expect(runtime.stdout.trim()).toBe(expected);
+  }
+
+  const mixedOutput = await readFile(join(emitted, "native-mixed.mjs"), "utf8");
+  expect(mixedOutput).toContain("NativeMode as runtimeNative");
+  expect(mixedOutput).toContain("NativeMode as runtimeNativeExport");
+  expect(mixedOutput).not.toContain("NativeType");
+  expect(
+    await readFile(join(emitted, "native-inline-only.mjs"), "utf8"),
+  ).not.toContain("native-mixed/addon.node");
+  await execute(
+    process.execPath,
+    [
+      compiler,
+      "--module",
+      "NodeNext",
+      "--moduleResolution",
+      "NodeNext",
+      "--target",
+      "ES2022",
+      "--skipLibCheck",
+      "--verbatimModuleSyntax",
+      "--outDir",
+      join(emitted, "verbatim"),
+      join(root, "cts/native-inline-only.mts"),
+    ],
+    { cwd: root, timeout: 10_000 },
+  );
+  const verbatim = await readFile(
+    join(emitted, "verbatim/native-inline-only.mjs"),
+    "utf8",
+  );
+  expect(verbatim).toContain('import {} from "native-mixed/addon.node";');
+  expect(verbatim).toContain('export {} from "native-mixed/addon.node";');
+  const ctsControl = await execute(process.execPath, ["entry.cjs"], {
+    cwd: emitted,
+    timeout: 5_000,
+  });
+  expect(ctsControl.stdout.trim().split("\n")).toEqual(["[42,43]", "99"]);
+  const resolution = await execute(process.execPath, ["resolution.cjs"], {
+    cwd: emitted,
+    timeout: 5_000,
+  });
+  expect(JSON.parse(resolution.stdout)).toEqual(["import", "require"]);
+  for (const [file, expected] of [
+    ["inline.cjs", ["import", "require", "nested-import", "import"]],
+    ["native.mjs", ["require", "import", "require", "import", "import"]],
+    ["native-template.mjs", ["require", "import", "require"]],
+    ["native-parenthesized.mjs", ["import", "import"]],
+    ["import-equals-local.mjs", 43],
+    ["native-default.cjs", ["require", "require", "require"]],
+    ["native-default.mjs", ["import", "import", "import"]],
+    ["native-default.js", ["require", "require", "require"]],
+    ["native-import-equals.cjs", "require"],
+    ["native-import-equals.mjs", "require"],
+    ["native-indexed.mjs", Array.from({ length: 13 }, () => "import")],
+    ["native-export-type-equals.cjs", "require"],
+  ] as const) {
+    const result = await execute(process.execPath, [file], {
+      cwd: emitted,
+      timeout: 5_000,
+    });
+    expect(JSON.parse(result.stdout)).toEqual(expected);
+  }
+  expect(
+    createRequire(join(emitted, "native.mjs")).resolve(
+      "native-mode/addon.node",
+    ),
+  ).toBe(join(emitted, "node_modules/native-mode/require.node"));
+  const nativeImport = await execute(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      'console.log(import.meta.resolve("native-mode/addon.node"))',
+    ],
+    { cwd: emitted, timeout: 5_000 },
+  );
+  expect(fileURLToPath(nativeImport.stdout.trim())).toBe(
+    join(emitted, "node_modules/native-mode/import.node"),
+  );
+  await expectInvalidCtsResolution(root);
+};
+
+const expectCtsModuleLookup = (
+  graph: Awaited<ReturnType<typeof analyzeJavaScriptDirectory>>["graph"],
+): void => {
+  const sourceDigest = createHash("sha256").update(ctsSource).digest("hex");
+  for (const [kind, specifier, path] of [
+    ["import", "./runtime-dep", "cts/runtime-dep.js"],
+    ["import", "cts-package", "node_modules/cts-package/actual.cjs"],
+    ["re-export", "cts-package", "node_modules/cts-package/actual.cjs"],
+  ] as const) {
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        relation: "imports",
+        properties: expect.objectContaining({
+          module_link_kind: kind,
+          specifier,
+          resolved_path: path,
+          resolution_status: "resolved",
+        }),
+        evidence: expect.objectContaining({
+          artifact: expect.objectContaining({ sha256: sourceDigest }),
+          location: expect.objectContaining({
+            available: true,
+            value: expect.objectContaining({ source: "cts/entry.cts" }),
+          }),
+        }),
+      }),
+    );
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        relation: "imports",
+        properties: expect.objectContaining({
+          kind: "static-import",
+          specifier,
+          resolved_path: path,
+        }),
+        evidence: expect.objectContaining({
+          artifact: expect.objectContaining({ sha256: sourceDigest }),
+        }),
+      }),
+    );
+  }
+  expect(graph.edges).toContainEqual(
+    expect.objectContaining({
+      relation: "imports",
+      properties: expect.objectContaining({
+        kind: "dynamic-import",
+        specifier: "cts-package",
+        resolved_path: "node_modules/cts-package/decoy.mjs",
+      }),
+      evidence: expect.objectContaining({
+        artifact: expect.objectContaining({ sha256: sourceDigest }),
+      }),
+    }),
+  );
+  expect(
+    graph.nodes.flatMap(({ observations }) => observations),
+  ).toContainEqual(
+    expect.objectContaining({
+      properties: expect.objectContaining({
+        semantic_role: "source-module",
+        path: "cts/entry.cts",
+        module_format: "commonjs",
+      }),
+    }),
+  );
+};
+
 type RuntimeControlResult = {
   readonly specifier: string;
   readonly ok: boolean;
@@ -250,10 +598,61 @@ const expectNodeRuntimeControls = (
   ]);
 };
 
+const expectErasedCtsDependencies = (
+  graph: Awaited<ReturnType<typeof analyzeJavaScriptDirectory>>["graph"],
+): void => {
+  for (const [path, text, count, names] of [
+    [
+      "cts/resolution.cts",
+      ctsResolutionSource,
+      4,
+      ["ImportOnly", "RequireOnly"],
+    ],
+    [
+      "cts/reexport.cts",
+      ctsReexportSource,
+      3,
+      ["*", "DirectImportOnly", "Types"],
+    ],
+  ] as const) {
+    const observations = graph.nodes.flatMap(
+      ({ observations }) => observations,
+    );
+    expect(observations).toContainEqual(
+      expect.objectContaining({
+        properties: expect.objectContaining({
+          semantic_role: "source-module",
+          path,
+          import_relationships: 0,
+          type_relationships: count,
+          export_relationships: 0,
+          export_names: [],
+          type_export_names: names,
+        }),
+        evidence: expect.objectContaining({
+          artifact: expect.objectContaining({
+            sha256: createHash("sha256").update(text).digest("hex"),
+          }),
+        }),
+      }),
+    );
+    expect(
+      graph.edges.filter(
+        ({ relation, evidence }) =>
+          (relation === "imports" || relation === "loads") &&
+          evidence.location.available &&
+          evidence.location.value.kind === "source-range" &&
+          evidence.location.value.source === path,
+      ),
+    ).toEqual([]);
+  }
+};
+
 cliTest.for(["CLI", "stdio MCP"] as const)(
   "matches Node module lookup for ESM and CommonJS through %s",
   async (surface, { cli }) => {
     const root = await createModuleLookupFixture();
+    await expectCtsRuntime(root);
     const [esmControl, cjsControl] = await Promise.all([
       execute(process.execPath, ["esm/runtime-control.mjs"], {
         cwd: root,
@@ -266,7 +665,15 @@ cliTest.for(["CLI", "stdio MCP"] as const)(
     ]);
     expectNodeRuntimeControls(esmControl.stdout, cjsControl.stdout);
 
-    const { graph } = await analyzeJavaScriptDirectory(surface, cli, root);
+    const { graph, summary } = await analyzeJavaScriptDirectory(
+      surface,
+      cli,
+      root,
+    );
+    expect(summary).toMatchObject({
+      native_addon_bindings: 5,
+      resolved_native_addon_bindings: 3,
+    });
     const expectations = [
       ["import", "./a%2eb.mjs", "esm/a.b.mjs", "resolved"],
       ["import", "./sub/%2e%2e/x.mjs", "esm/x.mjs", "resolved"],
@@ -349,5 +756,8 @@ cliTest.for(["CLI", "stdio MCP"] as const)(
         }),
       );
     }
+    expectCtsModuleLookup(graph);
+    expectErasedCtsDependencies(graph);
+    expectReviewModeEvidence(graph);
   },
 );

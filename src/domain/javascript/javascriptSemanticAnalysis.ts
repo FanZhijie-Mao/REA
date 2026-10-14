@@ -1,4 +1,5 @@
 import * as t from "@babel/types";
+import { typescriptImportResolutionMode } from "./typescriptImportResolutionMode.js";
 
 import {
   failedJavaScriptSemanticIr,
@@ -46,7 +47,11 @@ import { semanticRequireOrigin } from "./javascriptSemanticRequireOrigin.js";
 import { semanticBundledRequireOrigin } from "./javascriptBundledRequireOrigin.js";
 import { collectSemanticMemberMutationsSteps } from "./javascriptSemanticMemberMutations.js";
 import { indexJavaScriptAmbientWritesSteps } from "./javascriptSemanticAmbientWrites.js";
-import { hasUncertainTypeOnlyModuleSideEffect } from "./javascriptModuleDeclaration.js";
+import {
+  hasUncertainTypeOnlyModuleSideEffect,
+  isTypeOnlyImportDeclaration,
+  isTypeOnlyImportSpecifier,
+} from "./javascriptModuleDeclaration.js";
 import {
   collectSemanticReturns,
   resolveSemanticModuleCallables,
@@ -64,6 +69,7 @@ import { semanticCoverage } from "./javascriptSemanticCoverage.js";
 import { semanticResourceLimitsIn } from "./javascriptSemanticResourceLimits.js";
 import {
   parseJavaScriptSource,
+  parsedJSDocTypeImports,
   type ParsedJavaScriptSource,
 } from "./javascriptSourceParser.js";
 
@@ -164,9 +170,12 @@ export function* analyzeParsedJavaScriptSemanticsSteps(
   yield* traverseJavaScriptAstSteps(file.program, {
     enter: (node) => collectSemanticModuleLink(node, state),
   });
+  const typeImports = parsedJSDocTypeImports(file.program);
+  for (const declaration of typeImports.declarations)
+    collectSemanticModuleLink(declaration, state);
   yield;
   const references = yield* collectSemanticReferencesSteps(file.program, state);
-  const parserPartial = file.errors.length > 0;
+  const parserPartial = file.errors.length > 0 || !typeImports.complete;
   const bindings = immutableSemanticBindings(state);
   yield;
   const callables = collectSemanticReturns(state, parserPartial);
@@ -1151,6 +1160,7 @@ const bindImports = (
   scope: JavaScriptSemanticScopeState,
   state: JavaScriptSemanticAnalysisState,
 ): void => {
+  const resolutionMode = typescriptImportResolutionMode(node);
   for (const specifier of node.specifiers) {
     const importedPath = t.isImportDefaultSpecifier(specifier)
       ? ["default"]
@@ -1165,13 +1175,15 @@ const bindImports = (
       mutable: false,
       definitionNode: specifier.local,
       initializer: null,
-      directOrigin: { specifier: node.source.value, importedPath },
+      directOrigin: {
+        specifier: node.source.value,
+        importedPath,
+        ...(resolutionMode === undefined ? {} : { resolutionMode }),
+      },
       runtimeImport:
-        node.importKind !== "type" &&
-        node.importKind !== "typeof" &&
+        !isTypeOnlyImportDeclaration(node) &&
         (!t.isImportSpecifier(specifier) ||
-          (specifier.importKind !== "type" &&
-            specifier.importKind !== "typeof")),
+          !isTypeOnlyImportSpecifier(specifier)),
     });
   }
 };

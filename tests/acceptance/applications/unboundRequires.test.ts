@@ -228,7 +228,7 @@ const expectImportEqualsRelationships = (
     const typedLinks = graph.edges.filter(
       ({ relation, properties, evidence: edgeEvidence }) =>
         relation === "imports" &&
-        properties.module_link_kind === "require" &&
+        properties.module_link_kind === "re-export" &&
         edgeEvidence.location.available &&
         edgeEvidence.location.value.kind === "source-range" &&
         edgeEvidence.location.value.source === sourcePath,
@@ -239,6 +239,8 @@ const expectImportEqualsRelationships = (
         specifier: "typed-package",
         imported_name: null,
         local_name: "typed",
+        exported_name: "typed",
+        resolution_mode: "require",
         resolved_path: "node_modules/typed-package/actual.cjs",
         resolution_status: "resolved",
       },
@@ -251,28 +253,12 @@ const expectImportEqualsRelationships = (
           available: true,
           value: {
             source: sourcePath,
-            start: { line: 1, column: 7 },
+            start: { line: 1, column: 0 },
             end: { line: 1, column: typedLines[0].length },
           },
         },
       },
     });
-    expect(graph.edges).toContainEqual(
-      expect.objectContaining({
-        relation: "imports",
-        properties: expect.objectContaining({
-          module_link_kind: "export",
-          local_name: "typed",
-          resolution_mode: "require",
-          resolved_path: "node_modules/typed-package/actual.cjs",
-        }),
-        evidence: expect.objectContaining({
-          location: expect.objectContaining({
-            value: expect.objectContaining({ source: sourcePath }),
-          }),
-        }),
-      }),
-    );
     expect(
       graph.nodes.flatMap(({ observations }) => observations),
     ).toContainEqual(
@@ -312,7 +298,7 @@ const expectImportEqualsRelationships = (
           semantic_role: "source-module",
           path: sourcePath,
           module_format: format,
-          import_relationships: 1,
+          import_relationships: 0,
         }),
       }),
     );

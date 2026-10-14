@@ -25,6 +25,32 @@ describe("Electron option evidence", () => {
     });
   });
 
+  it("retains negative zero as an expression through JSON serialization", () => {
+    const analysis = analyzeJavaScriptStaticSource(`
+      const { BrowserWindow } = require("electron");
+      new BrowserWindow({ webPreferences: { zoomFactor: -0 } });
+    `);
+    expect(JSON.parse(JSON.stringify(analysis))).toMatchObject({
+      parse_status: "partial",
+      electron: {
+        browser_windows: [
+          {
+            web_preferences: [
+              {
+                name: "zoomFactor",
+                value: {
+                  status: "dynamic",
+                  value: null,
+                  expression: "-0",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it.each([
     ["for initializer", 'for (var electron = require("electron"); false;) {}'],
     ["do body", 'do { var electron = require("electron"); } while (false);'],
