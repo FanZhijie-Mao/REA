@@ -74,7 +74,9 @@ export const registerBinaryDiagnosticsCommands = (
   cli.command(CLI_COMMANDS.inspectRecordedCrash, {
     description:
       "Inspect supplied core registers/signals and optional debugger mapping evidence",
-    args: z.object({ path: z.string().describe("Local Linux amd64 ELF core") }),
+    args: z.object({
+      path: z.string().describe("Local Linux ELF64 core (x86-64 or AArch64)"),
+    }),
     options: z.object({
       debuggerContext: z
         .boolean()
