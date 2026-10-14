@@ -496,9 +496,11 @@ absolute or relative to the manifest file. A compact manifest contains:
 
 Before evaluating methods, the verifier fails closed on target SHA-256, MVID,
 assembly name, runtime-family, and managed-architecture mismatches whenever the
-manifest supplies those fields. It then pages each declared MethodDef token
-directly by row, so selected methods do not need to appear in the first member
-page of a large application. Optional `il_sha256` locks the exact raw CIL bytes
+manifest supplies those fields. It then selects each declared MethodDef token
+from one complete, resource-bounded member inspection reused across the manifest.
+This is post-inspection
+selection, not row paging; unlisted bodies may also be decoded. Optional
+`il_sha256` locks the exact raw CIL bytes
 in addition to REA's decoded-instruction-tuple digest. That normalized field
 has the byte boundaries documented above and is not a complete semantic CIL
 identity.
@@ -506,10 +508,14 @@ identity.
 The optional `application_graph` block reuses those exact-build method
 commitments. For each referenced MethodDef token, the verifier builds a bounded
 managed application-graph projection from the authenticated artifact and the
-single selected member page, then checks requested node kinds and feature-trace
-seed matches. This proves only that the selected static facts enter REA's graph
+selected method's previously verified member facts, then checks requested node
+kinds and feature-trace seed matches. This proves only that the selected static facts enter REA's graph
 and tracing vocabulary for that exact local build; it does not execute the
-application, inspect arbitrary unlisted methods, or infer runtime behavior.
+application or infer runtime behavior. Each member Evidence records the selected
+token and post-inspection selection stage. It retains shared metadata and only
+the selected method's body, call edges, field accesses and loaded user strings.
+Omitting other inspected methods makes graph coverage partial. Shared type,
+field and member-reference metadata retains its original scope.
 
 Output contains assertion status and compact identities only: file name,
 target SHA-256, MVID, assembly name, runtime-family, managed architecture,

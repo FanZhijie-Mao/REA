@@ -159,7 +159,7 @@ const metadataStreamHeader = (relativeOffset, size, name) => {
   return Buffer.concat([u32(relativeOffset), u32(size), paddedName]);
 };
 
-const metadataRoot = (tables, strings, guid, blob) => {
+const metadataRoot = (tables, strings, guid, blob, userStrings) => {
   const version = Buffer.from("v4.0.30319\0\0", "utf8");
   const header = Buffer.concat([
     u32(0x424a_5342),
@@ -169,13 +169,14 @@ const metadataRoot = (tables, strings, guid, blob) => {
     u32(version.length),
     version,
     u16(0),
-    u16(4),
+    u16(userStrings === undefined ? 4 : 5),
   ]);
   const streamHeaderSize =
     metadataStreamHeader(0, 0, "#~").length +
     metadataStreamHeader(0, 0, "#Strings").length +
     metadataStreamHeader(0, 0, "#GUID").length +
-    metadataStreamHeader(0, 0, "#Blob").length;
+    metadataStreamHeader(0, 0, "#Blob").length +
+    (userStrings === undefined ? 0 : metadataStreamHeader(0, 0, "#US").length);
   let offset = align4(header.length + streamHeaderSize);
   const tablesOffset = offset;
   offset = align4(offset + tables.length);
@@ -184,19 +185,26 @@ const metadataRoot = (tables, strings, guid, blob) => {
   const guidOffset = offset;
   offset = align4(offset + guid.length);
   const blobOffset = offset;
+  const userStringsOffset = align4(blobOffset + blob.length);
   const headers = Buffer.concat([
     metadataStreamHeader(tablesOffset, tables.length, "#~"),
     metadataStreamHeader(stringsOffset, strings.length, "#Strings"),
     metadataStreamHeader(guidOffset, guid.length, "#GUID"),
     metadataStreamHeader(blobOffset, blob.length, "#Blob"),
+    ...(userStrings === undefined
+      ? []
+      : [metadataStreamHeader(userStringsOffset, userStrings.length, "#US")]),
   ]);
-  const root = Buffer.alloc(align4(blobOffset + blob.length));
+  const root = Buffer.alloc(
+    align4(userStringsOffset + (userStrings?.length ?? 0)),
+  );
   header.copy(root, 0);
   headers.copy(root, header.length);
   tables.copy(root, tablesOffset);
   strings.copy(root, stringsOffset);
   guid.copy(root, guidOffset);
   blob.copy(root, blobOffset);
+  userStrings?.copy(root, userStringsOffset);
   return root;
 };
 
@@ -320,6 +328,7 @@ const buildManagedMetadata = (options, methods) => {
     strings.toBuffer(),
     guidHeap(options.mvid),
     blobs.toBuffer(),
+    options.userStringHeap,
   );
   if (options.corruptMetadataSignature === true) metadata.writeUInt32LE(0, 0);
   return metadata;

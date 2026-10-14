@@ -27,6 +27,8 @@ export interface ManagedPeFixtureOptions {
   readonly targetFramework?: string;
   readonly typeName?: string;
   readonly typeNamespace?: string;
+  /** Raw #US stream bytes; omitted preserves the existing four-stream fixture. */
+  readonly userStringHeap?: Buffer;
 }
 
 export const alternateMvid: Buffer;

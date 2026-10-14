@@ -42,12 +42,7 @@ async function verifyManagedAppManifest(context, rawManifest, manifestPath) {
     appManifestInspectionLimits,
   );
   verifyManifestTarget(manifest, artifact);
-  const methodVerification = verifyManifestMethods(
-    context,
-    manifest,
-    bytes,
-    target,
-  );
+  const methodVerification = verifyManifestMethods(manifest, bytes, target);
   const { methods, inspectedMethods } = methodVerification;
   let assertions = 1 + methodVerification.assertions;
   const applicationGraph =
@@ -56,7 +51,6 @@ async function verifyManagedAppManifest(context, rawManifest, manifestPath) {
       : verifyManagedAppManifestApplicationGraph({
           context,
           graphManifest: manifest.application_graph,
-          bytes,
           target,
           artifact,
           manifestMethods: manifest.methods,
@@ -109,16 +103,17 @@ function verifyManifestTarget(manifest, artifact) {
     );
 }
 
-function verifyManifestMethods(context, manifest, bytes, target) {
+function verifyManifestMethods(manifest, bytes, target) {
   const methods = [];
   let assertions = 0;
   const inspectedMethods = new Map();
+  const inspection = inspectManagedMembersBytes(bytes, target);
   for (const expectedMethod of manifest.methods) {
-    const method = inspectManagedMethodByToken(
-      context,
-      bytes,
-      target,
-      expectedMethod,
+    const members = selectManifestMethod(inspection, expectedMethod.token);
+    const method = members.methods[0];
+    ensure(
+      method.body.status === "present",
+      `method ${expectedMethod.token} body status is ${method.body.status}, expected present`,
     );
     ensure(
       method.signature.raw_sha256 === expectedMethod.signature_sha256,
@@ -138,7 +133,7 @@ function verifyManifestMethods(context, manifest, bytes, target) {
       `method ${expectedMethod.token} normalized IL sha256 mismatch: expected ${expectedMethod.normalized_il_sha256}, observed ${method.body.normalized_il_sha256 ?? "null"}`,
     );
     assertions += expectedMethod.il_sha256 === undefined ? 4 : 5;
-    inspectedMethods.set(expectedMethod.token, method);
+    inspectedMethods.set(expectedMethod.token, members);
     methods.push({
       label: expectedMethod.label ?? null,
       token: method.token,
@@ -156,7 +151,6 @@ function verifyManifestMethods(context, manifest, bytes, target) {
 function verifyManagedAppManifestApplicationGraph({
   context,
   graphManifest,
-  bytes,
   target,
   artifact,
   manifestMethods,
@@ -167,7 +161,6 @@ function verifyManagedAppManifestApplicationGraph({
     context,
     graphByToken,
     inspectedMethods,
-    bytes,
     target,
     artifact,
   };
@@ -227,9 +220,12 @@ function verifyManagedAppManifestApplicationGraph({
     summary: {
       projections: [...graphByToken.values()].map((projection) => ({
         method_token: projection.method.token,
+        member_evidence_id: projection.memberEvidence.evidence_id,
+        member_selection: projection.memberEvidence.parameters,
         graph_evidence_id: projection.evidence.evidence_id,
         node_kinds: projection.nodeKinds,
         summary: projection.summary,
+        coverage: projection.evidence.normalized_result.coverage,
       })),
       expected_node_kinds: graphManifest.expected_node_kinds,
       feature_traces: traces,
@@ -238,21 +234,15 @@ function verifyManagedAppManifestApplicationGraph({
 }
 
 const projectManifestMethod = (state, token) => {
-  const { appManifestInspectionLimits, appManifestMemberLimits } =
-    state.context;
+  const { appManifestInspectionLimits } = state.context;
   const existing = state.graphByToken.get(token);
   if (existing !== undefined) return existing;
-  const method = state.inspectedMethods.get(token);
+  const members = state.inspectedMethods.get(token);
   ensure(
-    method !== undefined,
+    members !== undefined,
     `application graph method ${token} must also be declared in manifest.methods`,
   );
-  const members = inspectManagedMethodPageByToken(
-    state.context,
-    state.bytes,
-    state.target,
-    token,
-  );
+  const method = members.methods[0];
   const artifactEvidence = createEvidence(
     state.target,
     MANAGED_STATIC_PROVIDER,
@@ -268,8 +258,8 @@ const projectManifestMethod = (state, token) => {
   const memberEvidence = createEvidence(state.target, MANAGED_STATIC_PROVIDER, {
     operation: "inspect_managed_members",
     parameters: {
-      ...appManifestMemberLimits,
-      methodOffset: methodTokenRow(token) - 1,
+      method_tokens: [token],
+      selection_stage: "post-inspection",
     },
     result: members,
     rawResult: null,
@@ -286,6 +276,7 @@ const projectManifestMethod = (state, token) => {
   );
   const projection = {
     method,
+    memberEvidence,
     evidence: projected.value,
     nodeKinds: [
       ...new Set(
@@ -298,32 +289,46 @@ const projectManifestMethod = (state, token) => {
   return projection;
 };
 
-function inspectManagedMethodByToken(context, bytes, target, expectedMethod) {
-  const members = inspectManagedMethodPageByToken(
-    context,
-    bytes,
-    target,
-    expectedMethod.token,
-  );
-  const method = members.methods.find(
-    ({ token }) => token === expectedMethod.token,
-  );
+/** Project a MethodDef's already inspected facts for manifest verification. */
+export function selectManifestMethod(members, token) {
+  methodTokenRow(token);
+  const method = members.methods.find((candidate) => candidate.token === token);
   ensure(
     method !== undefined,
-    `method ${expectedMethod.token} was not returned by the member inspector`,
+    `method ${token} was not returned by the member inspector`,
   );
-  ensure(
-    method.body.status === "present",
-    `method ${expectedMethod.token} body status is ${method.body.status}, expected present`,
+  const literals = new Set(
+    method.body.anchors
+      .filter(({ opcode }) => opcode === "ldstr")
+      .map(({ operand }) => operand),
   );
-  return method;
-}
-
-function inspectManagedMethodPageByToken(context, bytes, target, token) {
-  const { appManifestMemberLimits } = context;
-  const row = methodTokenRow(token);
-  return inspectManagedMembersBytes(bytes, target, {
-    ...appManifestMemberLimits,
-    methodOffset: row - 1,
-  });
+  // Selection projects already bounded inspection facts; it does not restore
+  // row paging or claim that omitted method bodies were never decoded.
+  return {
+    ...members,
+    methods: [method],
+    call_edges: members.call_edges.filter(
+      ({ caller_token }) => caller_token === token,
+    ),
+    field_accesses: members.field_accesses.filter(
+      ({ method_token }) => method_token === token,
+    ),
+    user_strings:
+      members.user_strings === null
+        ? null
+        : {
+            ...members.user_strings,
+            literals: members.user_strings.literals.filter(
+              ({ token: literal }) => literals.has(literal),
+            ),
+          },
+    coverage: {
+      ...members.coverage,
+      state: members.methods.length > 1 ? "partial" : members.coverage.state,
+    },
+    limitations: [
+      ...members.limitations,
+      `Manifest method selection retains only ${token} and its call edges, field accesses and loaded user strings after full member inspection; shared metadata is retained and other method bodies are omitted from this projection.`,
+    ],
+  };
 }
