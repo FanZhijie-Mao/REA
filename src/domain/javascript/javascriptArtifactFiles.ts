@@ -34,6 +34,18 @@ export interface JavaScriptArtifactFile {
 }
 
 /**
+ * One inventoried relevant file whose bytes could not be acquired (e.g. an
+ * ASAR unpacked companion beside the archive). The path is known present;
+ * there is no content hash or child artifact to analyze.
+ */
+export interface JavaScriptArtifactUnavailableFile {
+  readonly path: string;
+  readonly container_sha256: string;
+  readonly kind: JavaScriptArtifactFileKind;
+  readonly text: { readonly included: false; readonly reason: "unavailable" };
+}
+
+/**
  * One inventoried regular file outside the JavaScript-relevant kinds. Its presence
  * was inventoried, including unavailable or unhashed members. The source projection
  * does not read its bytes; references remain present-but-unanalyzed rather than absent.
@@ -64,6 +76,8 @@ export interface JavaScriptArtifactContainer {
 /** Deterministic relevant-file projection plus explicit omissions. */
 export interface JavaScriptArtifactFileSet {
   readonly files: readonly JavaScriptArtifactFile[];
+  /** Relevant files inventoried present but without acquirable bytes. */
+  readonly unavailable_files?: readonly JavaScriptArtifactUnavailableFile[];
   /** Borrowed inventory lookup for regular files the source projection does not read. */
   readonly unanalyzed_files?: JavaScriptUnanalyzedArtifactLookup;
   readonly containers: readonly JavaScriptArtifactContainer[];

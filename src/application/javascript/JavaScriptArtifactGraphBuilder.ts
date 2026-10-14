@@ -106,6 +106,9 @@ function* buildJavaScriptArtifactGraphInputSteps(
     root,
     filesByPath: new Map(fileSet.files.map((file) => [file.path, file])),
     unanalyzedFiles: fileSet.unanalyzed_files,
+    unavailableFiles: new Map(
+      (fileSet.unavailable_files ?? []).map((file) => [file.path, file]),
+    ),
     fileNodes: new Map(),
     assetNodes: new Map(),
     sourceModuleNodes: new Map(),
@@ -177,6 +180,7 @@ const graphCoverage = (context: JavaScriptArtifactGraphContext) => {
       javascript !== null && javascript.parse_status === "partial",
   );
   const unknownGap =
+    (context.fileSet.unavailable_files?.length ?? 0) > 0 ||
     (context.fileSet.source_selection?.unselected_files ?? 0) > 0 ||
     context.analysis.files.some(
       ({ analysis_failure, application_projection_failure }) =>
@@ -267,6 +271,10 @@ const graphLimitations = (
   );
   return [
     ...context.analysis.limitations,
+    ...(context.fileSet.unavailable_files ?? []).map(
+      ({ path }) =>
+        `The inventoried file at ${path} exists in the artifact container but its bytes were unavailable; its contents and relationships remain unknown.`,
+    ),
     ...(context.fileSet.source_selection === undefined
       ? []
       : [

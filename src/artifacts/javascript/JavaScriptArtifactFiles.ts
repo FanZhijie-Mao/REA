@@ -25,6 +25,7 @@ import type {
   JavaScriptArtifactFileKind,
   JavaScriptArtifactFile,
   JavaScriptArtifactContainer,
+  JavaScriptArtifactUnavailableFile,
   JavaScriptUnanalyzedArtifactFile,
   JavaScriptUnanalyzedArtifactLookup,
   JavaScriptArtifactFileSet,
@@ -143,6 +144,9 @@ export const readJavaScriptArtifactFiles = async (
   assertExpectedFilesWereVisited(expected, files);
   return {
     files,
+    unavailable_files: [...inventory.unavailableFiles.values()].sort(
+      (left, right) => compareUnicodeCodePoints(left.path, right.path),
+    ),
     unanalyzed_files: createUnanalyzedArtifactLookup(
       snapshot,
       context.containers,
@@ -386,23 +390,31 @@ const expectedInventory = (
 ): {
   readonly files: ReadonlyMap<string, ExpectedFile>;
   readonly containers: ReadonlyMap<string, ExpectedContainer>;
-  readonly unavailableFiles: ReadonlySet<string>;
+  readonly unavailableFiles: ReadonlyMap<
+    string,
+    JavaScriptArtifactUnavailableFile
+  >;
 } => {
   const nodes = new Map(snapshot.nodes.map((node) => [node.artifact_id, node]));
   const files = new Map<string, ExpectedFile>();
   const containers = new Map<string, ExpectedContainer>();
-  const unavailableFiles = new Set<string>();
+  const unavailableFiles = new Map<string, JavaScriptArtifactUnavailableFile>();
+  const pendingUnavailable: Array<{
+    readonly path: string;
+    readonly kind: JavaScriptArtifactFileKind;
+  }> = [];
   for (const occurrence of snapshot.occurrences) {
     if (occurrence.logical_path === ".") continue;
     const isNestedAsar =
       occurrence.entry_kind === "file" &&
       occurrence.logical_path.toLowerCase().endsWith(".asar");
     if (occurrence.artifact_id === null) {
-      if (
-        occurrence.entry_kind === "file" &&
-        relevantKind(occurrence.logical_path) !== undefined
-      )
-        unavailableFiles.add(occurrence.logical_path);
+      const kind =
+        occurrence.entry_kind === "file"
+          ? relevantKind(occurrence.logical_path)
+          : undefined;
+      if (kind !== undefined)
+        pendingUnavailable.push({ path: occurrence.logical_path, kind });
       if (isNestedAsar)
         containers.set(occurrence.logical_path, {
           hash_status: occurrence.hash_status,
@@ -440,6 +452,34 @@ const expectedInventory = (
       bytes: node.size,
       inventoryArtifactId: node.artifact_id,
       kind,
+    });
+  }
+  // Container identity mirrors the traversal owner: members of an expanded
+  // nested archive belong to that archive, everything else to the root.
+  // Unavailable entries carry no content identity, only presence. The
+  // directory lookup is built once so missing files do not rescan archives.
+  const containerShas = new Map<string, string>();
+  for (const [path, container] of containers)
+    if (container.inventory !== null)
+      containerShas.set(path, container.inventory.sha256);
+  for (const pending of pendingUnavailable) {
+    let containerSha256 = snapshot.manifest.root_sha256;
+    let prefix = pending.path;
+    for (;;) {
+      const slash = prefix.lastIndexOf("/");
+      if (slash < 0) break;
+      prefix = prefix.slice(0, slash);
+      const sha256 = containerShas.get(prefix);
+      if (sha256 !== undefined) {
+        containerSha256 = sha256;
+        break;
+      }
+    }
+    unavailableFiles.set(pending.path, {
+      path: pending.path,
+      container_sha256: containerSha256,
+      kind: pending.kind,
+      text: { included: false, reason: "unavailable" },
     });
   }
   return { files, containers, unavailableFiles };

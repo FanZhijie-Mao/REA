@@ -142,6 +142,7 @@ const addWindowPreload = (
     files: input.context.filesByPath,
     directoryPaths: input.context.directoryPaths,
     unanalyzedFiles: input.context.unanalyzedFiles,
+    unavailableFiles: input.context.unavailableFiles,
     runtimePathKind: "exact-file",
   });
   const role = createElectronRoleNode(input.context, {
@@ -244,6 +245,7 @@ const addUtilityProcess = (
           files: context.filesByPath,
           directoryPaths: context.directoryPaths,
           unanalyzedFiles: context.unanalyzedFiles,
+          unavailableFiles: context.unavailableFiles,
           runtimePathKind: "node-entrypoint",
         });
   const resolutionProperties = {

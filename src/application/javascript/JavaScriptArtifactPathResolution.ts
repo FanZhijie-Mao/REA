@@ -7,6 +7,7 @@ import {
 } from "../../domain/artifactIdentity.js";
 import type {
   JavaScriptArtifactFile,
+  JavaScriptArtifactUnavailableFile,
   JavaScriptUnanalyzedArtifactLookup,
 } from "../../domain/javascript/javascriptArtifactFiles.js";
 import {
@@ -83,6 +84,10 @@ export interface ResolveArtifactPathInput {
   readonly directoryPaths?: ReadonlySet<string> | undefined;
   /** Inventoried files outside the JavaScript projection: present, never read. */
   readonly unanalyzedFiles?: JavaScriptUnanalyzedArtifactLookup | undefined;
+  /** Relevant files inventoried present but without acquirable bytes. */
+  readonly unavailableFiles?:
+    | ReadonlyMap<string, JavaScriptArtifactUnavailableFile>
+    | undefined;
   readonly htmlBaseHref?: string | null;
   /** Import/require semantics; runtime resource paths omit this provenance. */
   readonly moduleKind?: JavaScriptModuleResolutionMode;
@@ -1146,8 +1151,22 @@ const readPackageMetadata = (
   if (
     file === undefined ||
     (source !== undefined && file.container_sha256 !== source.container_sha256)
-  )
+  ) {
+    // An inventoried manifest without acquirable bytes leaves the package
+    // entry unknown; falling back to an index file would select a wrong
+    // target while reporting it resolved.
+    const unavailable = input.unavailableFiles?.get(path);
+    if (
+      unavailable !== undefined &&
+      (source === undefined ||
+        unavailable.container_sha256 === source.container_sha256)
+    )
+      return {
+        kind: "unavailable",
+        limitation: `Directory package metadata ${path} exists in the inventoried artifact container but its bytes were unavailable, so the package entry remains unknown.`,
+      };
     return { kind: "absent" };
+  }
   if (!file.text.included)
     return {
       kind: "unavailable",
@@ -1275,6 +1294,9 @@ const resolveDirectory = (
     ...(input.unanalyzedFiles === undefined
       ? {}
       : { unanalyzedFiles: input.unanalyzedFiles }),
+    ...(input.unavailableFiles === undefined
+      ? {}
+      : { unavailableFiles: input.unavailableFiles }),
     ...(input.moduleKind === undefined ? {} : { moduleKind: input.moduleKind }),
   };
   const candidate = contextualCandidate(entryInput);
@@ -1401,6 +1423,23 @@ const findFileCandidate = (
       limitations: [
         ...(unanalyzed.limitations ?? []),
         `${path} exists in the inventoried artifact container (sha256 ${unanalyzed.sha256 ?? "unknown"}, ${unanalyzed.bytes === null ? "unknown size" : `${String(unanalyzed.bytes)} bytes`}) but is not a JavaScript, JSON, HTML, source map, or native add-on file; its contents were not analyzed.`,
+      ],
+    };
+  // A relevant file the inventory retained without bytes (e.g. ASAR unpacked
+  // companion bytes beside the archive) is present but unanalysable. It must
+  // never read as absent.
+  const unavailable = input.unavailableFiles?.get(path);
+  if (
+    unavailable !== undefined &&
+    (source === undefined ||
+      unavailable.container_sha256 === source.container_sha256)
+  )
+    return {
+      resolvedPath: null,
+      status: "unavailable",
+      candidatePath: path,
+      limitations: [
+        `${path} exists in the inventoried artifact container but its bytes were unavailable, so its contents were not analyzed.`,
       ],
     };
   return null;

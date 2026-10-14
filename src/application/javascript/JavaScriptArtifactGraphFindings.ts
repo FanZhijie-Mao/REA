@@ -320,6 +320,7 @@ const addDiscoveredRole = (
     files: context.filesByPath,
     directoryPaths: context.directoryPaths,
     unanalyzedFiles: context.unanalyzedFiles,
+    unavailableFiles: context.unavailableFiles,
     ...(input.value.role === "preload" ||
     (input.value.role === "renderer" &&
       input.value.resolution_context === "filesystem-expression")
@@ -377,6 +378,7 @@ const addSourceMapEdge = (
     files: context.filesByPath,
     directoryPaths: context.directoryPaths,
     unanalyzedFiles: context.unanalyzedFiles,
+    unavailableFiles: context.unavailableFiles,
   });
   const resolvedPath = resolution.resolved_path;
   const resolvedFile =
@@ -481,6 +483,7 @@ const resolveReference = (
         files: context.filesByPath,
         directoryPaths: context.directoryPaths,
         unanalyzedFiles: context.unanalyzedFiles,
+        unavailableFiles: context.unavailableFiles,
       })
     : resolveArtifactPathByContext({
         declaredPath: specifier,
@@ -489,6 +492,7 @@ const resolveReference = (
         files: context.filesByPath,
         directoryPaths: context.directoryPaths,
         unanalyzedFiles: context.unanalyzedFiles,
+        unavailableFiles: context.unavailableFiles,
         ...("require" === reference.kind ||
         "static-import" === reference.kind ||
         "dynamic-import" === reference.kind

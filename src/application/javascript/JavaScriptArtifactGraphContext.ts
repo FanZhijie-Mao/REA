@@ -19,6 +19,7 @@ import type {
   JavaScriptArtifactFile,
   JavaScriptArtifactFileSet,
   JavaScriptArtifactFileKind,
+  JavaScriptArtifactUnavailableFile,
 } from "../../domain/javascript/javascriptArtifactFiles.js";
 import { JavaScriptArtifactGraphAccumulator } from "./JavaScriptArtifactGraphAccumulator.js";
 import {
@@ -44,6 +45,11 @@ export interface JavaScriptArtifactGraphContext {
   readonly filesByPath: ReadonlyMap<string, JavaScriptArtifactFile>;
   /** Borrowed inventory lookup for present files outside the source projection. */
   readonly unanalyzedFiles: JavaScriptUnanalyzedArtifactLookup | undefined;
+  /** Relevant files inventoried present but without acquirable bytes. */
+  readonly unavailableFiles: ReadonlyMap<
+    string,
+    JavaScriptArtifactUnavailableFile
+  >;
   readonly fileNodes: Map<string, ApplicationNode>;
   readonly assetNodes: Map<string, ApplicationNode>;
   readonly sourceModuleNodes: Map<string, ApplicationNode>;
