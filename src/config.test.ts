@@ -368,3 +368,56 @@ describe("default Linux Hopper launcher", () => {
     ).toBe(`${home}/.local/share/rea/hopper/bin/Hopper`);
   });
 });
+
+describe("default macOS Hopper launcher", () => {
+  const home = "/fixture/home";
+  const withExecutables =
+    (paths: readonly string[]) =>
+    (path: string): boolean =>
+      paths.includes(path);
+
+  it("selects the system launcher when present", () => {
+    expect(
+      defaultHopperLauncherPath(
+        "darwin",
+        home,
+        withExecutables([
+          "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+        ]),
+      ),
+    ).toBe("/Applications/Hopper Disassembler.app/Contents/MacOS/hopper");
+  });
+
+  it("selects the user Applications launcher when system copy is missing", () => {
+    expect(
+      defaultHopperLauncherPath(
+        "darwin",
+        home,
+        withExecutables([
+          `${home}/Applications/Hopper Disassembler.app/Contents/MacOS/hopper`,
+        ]),
+      ),
+    ).toBe(
+      `${home}/Applications/Hopper Disassembler.app/Contents/MacOS/hopper`,
+    );
+  });
+
+  it("prefers the system launcher over the user Applications launcher", () => {
+    expect(
+      defaultHopperLauncherPath(
+        "darwin",
+        home,
+        withExecutables([
+          "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+          `${home}/Applications/Hopper Disassembler.app/Contents/MacOS/hopper`,
+        ]),
+      ),
+    ).toBe("/Applications/Hopper Disassembler.app/Contents/MacOS/hopper");
+  });
+
+  it("falls back to the default path when neither candidate is executable", () => {
+    expect(defaultHopperLauncherPath("darwin", home, withExecutables([]))).toBe(
+      "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+    );
+  });
+});

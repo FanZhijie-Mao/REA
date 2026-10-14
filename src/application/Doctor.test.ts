@@ -615,6 +615,19 @@ describe("doctor installed Hopper discovery", () => {
     );
     expect(result.hopperPath).toBe(path);
   });
+
+  it("detects the user Applications Hopper launcher on macOS", async () => {
+    const path =
+      "/fixture/home/Applications/Hopper Disassembler.app/Contents/MacOS/hopper";
+    const result = await runDoctor(
+      undefined,
+      host({
+        platform: "darwin",
+        executable: (candidate) => Promise.resolve(candidate === path),
+      }),
+    );
+    expect(result.hopperPath).toBe(path);
+  });
 });
 
 describe("doctor target admission on Linux", () => {

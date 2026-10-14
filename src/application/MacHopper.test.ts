@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   installMacHopper,
+  macHopperLauncherCandidates,
   type MacHopperBundleVerification,
   type MacHopperInstallHost,
 } from "./MacHopper.js";
@@ -141,5 +142,14 @@ describe("macOS Hopper installation", () => {
     expect(host.opens).toBe(0);
     expect(host.unmounts).toBe(1);
     expect(host.cleanups).toBe(1);
+  });
+});
+
+describe("macHopperLauncherCandidates", () => {
+  it("orders system and user Applications launcher candidates", () => {
+    expect(macHopperLauncherCandidates("/Users/analyst")).toEqual([
+      "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+      "/Users/analyst/Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+    ]);
   });
 });

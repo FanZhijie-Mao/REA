@@ -9,9 +9,11 @@ import {
   linuxHopperLauncherCandidates,
   REA_MANAGED_LINUX_HOPPER_LAUNCHER,
 } from "../application/LinuxHopper.js";
+import {
+  DEFAULT_MAC_HOPPER_LAUNCHER,
+  macHopperLauncherCandidates,
+} from "../application/MacHopper.js";
 
-const DEFAULT_HOPPER_LAUNCHER_PATH =
-  "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper";
 const executableAvailable = (path: string): boolean => {
   try {
     accessSync(path, constants.X_OK);
@@ -26,11 +28,19 @@ export const defaultHopperLauncherPath = (
   homeDirectory: string,
   executable: (path: string) => boolean = executableAvailable,
 ): string => {
-  if (platform !== "linux") return DEFAULT_HOPPER_LAUNCHER_PATH;
-  return (
-    linuxHopperLauncherCandidates(homeDirectory).find(executable) ??
-    REA_MANAGED_LINUX_HOPPER_LAUNCHER
-  );
+  if (platform === "linux") {
+    return (
+      linuxHopperLauncherCandidates(homeDirectory).find(executable) ??
+      REA_MANAGED_LINUX_HOPPER_LAUNCHER
+    );
+  }
+  if (platform === "darwin") {
+    return (
+      macHopperLauncherCandidates(homeDirectory).find(executable) ??
+      DEFAULT_MAC_HOPPER_LAUNCHER
+    );
+  }
+  return DEFAULT_MAC_HOPPER_LAUNCHER;
 };
 
 /** Parse provider configuration and runtime prerequisites at the composition root. */

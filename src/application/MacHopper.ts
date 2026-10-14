@@ -31,6 +31,20 @@ const HOPPER_PUBLISHER_REQUIREMENT = macDeveloperIdRequirement(
   HOPPER_PUBLISHER.teamIdentifier,
 );
 
+/** Standard macOS Hopper launcher candidates, preferring the system installation. */
+export const DEFAULT_MAC_HOPPER_LAUNCHER =
+  "/Applications/Hopper Disassembler.app/Contents/MacOS/hopper";
+
+export const macHopperLauncherCandidates = (
+  homeDirectory: string,
+): readonly string[] => [
+  DEFAULT_MAC_HOPPER_LAUNCHER,
+  join(
+    homeDirectory,
+    "Applications/Hopper Disassembler.app/Contents/MacOS/hopper",
+  ),
+];
+
 /** Outcome of reading a mounted bundle's signature and publisher identity. */
 export type MacHopperBundleVerification =
   | "verified"
