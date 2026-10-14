@@ -6,6 +6,7 @@ import {
   lstat,
   open,
   readdir,
+  rename,
   rm,
   utimes,
   writeFile,
@@ -15,7 +16,35 @@ import { join } from "node:path";
 
 import { expect, it } from "vitest";
 
-import { hashFile } from "./FilesystemSnapshot.js";
+import { hashFile, snapshotRoots } from "./FilesystemSnapshot.js";
+import { parseProcessScenario } from "../../domain/process/processScenario.js";
+
+it("rejects cancellation during a now-inaccessible observed root lookup", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "rea-snapshot-absent-cancel-"),
+  );
+  const parent = join(directory, "reports");
+  const selected = join(parent, "final.json");
+  try {
+    await mkdir(parent);
+    await writeFile(selected, "observed\n");
+    const scenario = parseProcessScenario({
+      executable: process.execPath,
+      working_directory: directory,
+      filesystem_observation_paths: [selected],
+    });
+    const before = await snapshotRoots(scenario);
+    await rename(parent, join(directory, "saved-reports"));
+    await writeFile(parent, "regular file");
+    const controller = new AbortController();
+    const pending = snapshotRoots(scenario, controller.signal, before);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 const countOpenDescriptorsFor = async (path: string): Promise<number> => {
   const directory = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
