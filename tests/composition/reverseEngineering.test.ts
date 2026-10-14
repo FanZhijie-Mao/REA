@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  realpath as realpathOf,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { TestReverseEngineeringService as ReverseEngineeringService } from "../support/reverseEngineeringService.js";
 import { createReverseEngineeringService } from "../../src/composition/reverseEngineering.js";
@@ -50,7 +55,7 @@ describe("reverse engineering command services", () => {
       if (!result.ok) return;
       expect(calls).toEqual([
         {
-          command: "/tools/objdump",
+          command: resolve("/tools/objdump"),
           args: ["-W", "-WK", path],
           env: expect.objectContaining({ DEBUGINFOD_URLS: "" }),
         },
@@ -194,7 +199,7 @@ it("uses one selected environment snapshot for provider selection and execution"
     expect(result.ok).toBe(true);
     expect(calls).toEqual([
       {
-        command: "/selected/rizin",
+        command: resolve("/selected/rizin"),
         env: {
           REA_RIZIN_COMMAND: "/selected/rizin",
           PATH: "/selected/bin",
@@ -307,7 +312,7 @@ describe("Rizin command service", () => {
       if (!result.ok) return;
       expect(calls).toEqual([
         {
-          command: "/tools/rizin",
+          command: resolve("/tools/rizin"),
           args: ["-N", "-q", "-c", "iI", path],
         },
       ]);
@@ -326,7 +331,7 @@ describe("Rizin command service", () => {
       expect(result.value.limitations).toHaveLength(4);
       expect(result.value.parameters).toMatchObject({
         command: "iI",
-        provider_executable: "/tools/rizin",
+        provider_executable: resolve("/tools/rizin"),
       });
       expect(result.value.provider.id).toBe("rizin");
     } finally {
@@ -561,4 +566,35 @@ it("marks signal-terminated provider output incomplete", async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+describe("provider argv path binding", () => {
+  it("binds provider argv to the path captured before the process directory changes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "rea-argv-binding-"));
+    await writeFile(join(directory, "fixture.bin"), "fixture");
+    const calls: string[][] = [];
+    const service = new ReverseEngineeringService({
+      environment: { REA_OBJDUMP_COMMAND: "/tools/objdump" },
+      run: async (_command, args) => {
+        calls.push([...args]);
+        return { stdout: "", stderr: "" };
+      },
+    });
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(directory);
+
+    try {
+      const running = service.inspectWithObjdump({
+        path: "fixture.bin",
+        operation: "file_headers",
+      });
+      cwd.mockReturnValue(tmpdir());
+      const result = await running;
+
+      expect(result.ok).toBe(true);
+      expect(calls).toEqual([["-f", join(directory, "fixture.bin")]]);
+    } finally {
+      cwd.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

@@ -577,6 +577,8 @@ export const createServer = (
         : { availabilityPolicy: availability.policy }),
       androidAnalysisAvailability: (signal) =>
         android.inspectAvailability(signal),
+      retryReverseEngineeringCleanup: (operation) =>
+        reverseEngineering.retryCleanup(operation),
       startedAt,
     });
   }

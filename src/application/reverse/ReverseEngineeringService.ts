@@ -189,11 +189,17 @@ export class ReverseEngineeringService {
         err(new AnalysisInputError("inspect_with_objdump")),
       );
     const input = parsed.data;
-    const command = this.#commands.objdump(input);
+    // Capture the absolute artifact path once: the argv and the digest must
+    // name the same file even if the process directory changes while awaiting.
+    const bound =
+      input.operation === "architectures"
+        ? input
+        : { ...input, path: resolve(input.path) };
+    const command = this.#commands.objdump(bound);
     return this.#observe(
       "inspect_with_objdump",
       command,
-      input.operation === "architectures" ? undefined : input.path,
+      bound.operation === "architectures" ? undefined : bound.path,
       input,
       options.signal,
     );
@@ -209,11 +215,12 @@ export class ReverseEngineeringService {
         err(new AnalysisInputError("execute_rizin_command")),
       );
     const input = parsed.data;
-    const command = this.#commands.rizin(input);
+    const absolutePath = resolve(input.path);
+    const command = this.#commands.rizin({ ...input, path: absolutePath });
     return this.#observe(
       "execute_rizin_command",
       command,
-      input.path,
+      absolutePath,
       input,
       options.signal,
     );

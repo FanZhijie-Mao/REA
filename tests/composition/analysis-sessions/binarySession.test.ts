@@ -262,6 +262,33 @@ it("leaves analysis unbound when a command returns before its writer finishes", 
   await session.close();
 });
 
+it("lets a retried open resolve a retained external-mutation cleanup failure", async () => {
+  const [target] = await createBinarySessionTargets();
+  const session = createTestBinarySession(createCacheProvider([]));
+  expect((await session.open(target)).ok).toBe(true);
+  const retained = new ProviderCleanupError("rizin", ["owned-rizin"], {
+    reason: "descendant still live",
+  });
+  await session.withAdmittedExternalMutation(
+    target,
+    undefined,
+    async () => err(retained),
+    (_value, error) => error,
+  );
+  expect(retained.cleanupIncomplete).toBe(true);
+  expect((await session.open(target)).ok).toBe(false);
+
+  const reopened = await session.open(target, {
+    beforeOpen: async () => {
+      retained.resolveCleanup();
+      return resultOk(null);
+    },
+  });
+
+  expect(reopened.ok).toBe(true);
+  await session.close();
+});
+
 it("retires analysis when an external mutation uses a hard link", async () => {
   const [target] = await createBinarySessionTargets();
   const alias = join(dirname(target), "hard-link-alias.hop");

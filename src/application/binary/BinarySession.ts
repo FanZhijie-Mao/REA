@@ -115,7 +115,10 @@ export class BinarySession
   async #tryRetainedFastPath(
     retained: SessionBinding,
     target: BinaryTarget,
-    options: Pick<BinarySessionOpenOptions, "signal" | "snapshot">,
+    options: Pick<
+      BinarySessionOpenOptions,
+      "signal" | "snapshot" | "beforeOpen"
+    >,
   ): Promise<Result<BinaryTarget, AnalysisError> | undefined> {
     const live = await this.#retainedClientLive(retained.client, options);
     if (isAborted(options.signal))
@@ -232,7 +235,10 @@ export class BinarySession
   /** Open a previewed target without repeating parsing or provider profile discovery. */
   openResolvedTarget(
     resolved: Pick<ResolvedSessionOpen, "target" | "route">,
-    options: Pick<BinarySessionOpenOptions, "signal" | "snapshot"> = {},
+    options: Pick<
+      BinarySessionOpenOptions,
+      "signal" | "snapshot" | "beforeOpen"
+    > = {},
   ): Promise<Result<BinaryTarget, AnalysisError>> {
     return this.#open(
       () =>
@@ -251,7 +257,10 @@ export class BinarySession
 
   #open(
     resolve: () => Promise<Result<ResolvedSessionOpen, AnalysisError>>,
-    options: Pick<BinarySessionOpenOptions, "signal" | "snapshot">,
+    options: Pick<
+      BinarySessionOpenOptions,
+      "signal" | "snapshot" | "beforeOpen"
+    >,
   ): Promise<Result<BinaryTarget, AnalysisError>> {
     return this.#serialize((admittedThrough) =>
       this.#openWithinTransition(admittedThrough, resolve, options),
@@ -261,12 +270,23 @@ export class BinarySession
   async #openWithinTransition(
     admittedThrough: number,
     resolve: () => Promise<Result<ResolvedSessionOpen, AnalysisError>>,
-    options: Pick<BinarySessionOpenOptions, "signal" | "snapshot">,
+    options: Pick<
+      BinarySessionOpenOptions,
+      "signal" | "snapshot" | "beforeOpen"
+    >,
   ): Promise<Result<BinaryTarget, AnalysisError>> {
-    if (this.#externalMutationCleanupFailure?.cleanupIncomplete === true)
-      return err(this.#externalMutationCleanupFailure);
     if (isAborted(options.signal))
       return err(new AnalysisCancelledError("open_binary"));
+    // Retry retained owners first: a successful retry resolves the stored
+    // failure, so the guard below must observe the post-retry state.
+    if (options.beforeOpen !== undefined) {
+      const prepared = await options.beforeOpen();
+      if (!prepared.ok) return prepared;
+      if (isAborted(options.signal))
+        return err(new AnalysisCancelledError("open_binary"));
+    }
+    if (this.#externalMutationCleanupFailure?.cleanupIncomplete === true)
+      return err(this.#externalMutationCleanupFailure);
     const resolved = await resolve();
     if (!resolved.ok) return resolved;
     const { target, route, sameTarget } = resolved.value;
