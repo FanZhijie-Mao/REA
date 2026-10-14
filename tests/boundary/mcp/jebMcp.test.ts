@@ -1,6 +1,9 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createJebAnalysisProvider } from "../../../src/composition/jeb.js";
+import { createApplicationMcpHarness } from "../../fixtures/applicationMcpHarness.js";
+import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 
 import type { JebAnalysisPort } from "../../../src/application/jeb/JebAnalysisPort.js";
 import { createAnalysisExecution } from "../../../src/application/AnalysisProvider.js";
@@ -183,3 +186,44 @@ it("keeps the MCP server usable when REA_JEB_MCP_URL is invalid", async () => {
     },
   });
 });
+
+it.each(["/mcp/extra", "/not-mcp"])(
+  "reports invalid JEB route %s before connection construction",
+  async (route) => {
+    const factory = vi.fn(() => ({
+      connect: () => Promise.resolve(["get_client_information"]),
+      call: () =>
+        Promise.resolve({
+          success: true,
+          version: "5.48.0",
+          gui_client: false,
+        }),
+      close: () => Promise.resolve(),
+    }));
+    const provider = createJebAnalysisProvider(
+      { REA_JEB_MCP_URL: `http://127.0.0.1:8425${route}` },
+      factory,
+    );
+    const harness = await createApplicationMcpHarness({
+      serverOptions: { jebAnalysis: provider },
+    });
+    onTestFinished(harness.close);
+    const result = await harness.client.callTool({
+      name: "inspect_jeb_client",
+      arguments: {},
+    });
+    expect(parseMcpToolError(result).error).toMatchObject({
+      code: "configuration_invalid",
+      details: {
+        settings: [
+          {
+            setting: "REA_JEB_MCP_URL",
+            constraint: expect.stringContaining("/mcp"),
+          },
+        ],
+      },
+    });
+    expect(factory).not.toHaveBeenCalled();
+    await harness.client.ping();
+  },
+);
