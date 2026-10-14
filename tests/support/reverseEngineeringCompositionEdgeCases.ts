@@ -1,4 +1,5 @@
-import { rm, truncate, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { rm, stat, truncate, writeFile } from "node:fs/promises";
 
 import { expect, it, vi } from "vitest";
 
@@ -271,6 +272,34 @@ const registerSharedReverseEngineeringEdgeCasesPart3 = (): void => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a path replaced by a FIFO between the stat and the digest open",
+    async () => {
+      const { directory, path } = await createArtifact();
+      const regular = await stat(path);
+      await rm(path);
+      execFileSync("mkfifo", [path]);
+      // The stat observed a regular file; the open must classify the handle.
+      const service = new ReverseEngineeringService({
+        stat: async () => regular,
+        run: async () => ({ stdout: "", stderr: "" }),
+      });
+
+      try {
+        const result = await Promise.race([
+          service.inspectWithObjdump({ path, operation: "file_headers" }),
+          new Promise<"hung">((resolve) =>
+            setTimeout(() => resolve("hung"), 5_000),
+          ),
+        ]);
+        expect(result).not.toBe("hung");
+        expect(result).toMatchObject({ ok: false });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("maps the artifact digest deadline to a timeout error", async () => {
     const { directory, path } = await createArtifact();
