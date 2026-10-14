@@ -284,13 +284,13 @@ const emptyShapeUnknownChange = (
     path: "",
     discriminant: null,
     presence: UNKNOWN_COVERAGE_PRESENCE,
-    left: emptyShapeAvailability(input.leftShapes, "left"),
-    right: emptyShapeAvailability(input.rightShapes, "right"),
+    left: emptyShapeAvailability("left"),
+    right: emptyShapeAvailability("right"),
     left_source_range: null,
     right_source_range: null,
     evidence_links: input.evidenceLinks,
     limitations: [
-      "At least one selected export has no retained direct return shape.",
+      "Neither selected export has a retained direct return shape.",
     ],
   });
 
@@ -455,15 +455,9 @@ const selectionAvailability = (
   reason: `${capitalize(side)} export selection is ${selection.status}.`,
 });
 
-const emptyShapeAvailability = (
-  shapes: readonly Shape[],
-  side: "left" | "right",
-): ValueAvailability => ({
+const emptyShapeAvailability = (side: "left" | "right"): ValueAvailability => ({
   availability: "unknown",
-  reason:
-    shapes.length === 0
-      ? `${capitalize(side)} export has no retained direct return shape.`
-      : `${capitalize(side)} export return shape cannot be paired without an opposite variant.`,
+  reason: `${capitalize(side)} export has no retained direct return shape.`,
 });
 
 const unpairedChange = (
