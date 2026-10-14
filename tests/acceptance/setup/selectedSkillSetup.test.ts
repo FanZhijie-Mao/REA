@@ -1,4 +1,5 @@
 import { access, readFile, readdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 
 import { expect } from "vitest";
@@ -97,6 +98,30 @@ cliTest(
       appliedActions: ["installed_skill"],
     });
     await assertAligned();
+    const damagedBytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0xff, 0x0a]);
+    const reference = join(selected, "references/native-and-artifacts.md");
+    const firstBackup = `${reference}.rea.backup`;
+    const firstBytes = await readFile(firstBackup);
+    await writeFile(reference, damagedBytes);
+    const repairedEncoding = await run(args);
+    expect(repairedEncoding.exitCode, repairedEncoding.stdout).toBe(0);
+    expect(repairedEncoding.json).toMatchObject({
+      status: "ready",
+      appliedActions: ["installed_skill"],
+    });
+    await assertAligned();
+    expect(await readFile(firstBackup)).toEqual(firstBytes);
+    expect(
+      await readFile(
+        `${firstBackup}.${createHash("sha256").update(damagedBytes).digest("hex")}.recovery`,
+      ),
+    ).toEqual(damagedBytes);
+    const repeatedRepair = await run(args);
+    expect(repeatedRepair.exitCode, repeatedRepair.stdout).toBe(0);
+    expect(repeatedRepair.json).toMatchObject({
+      status: "ready",
+      appliedActions: [],
+    });
     await expect(access(shared)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(configuration, "utf8")).toBe(before);
 

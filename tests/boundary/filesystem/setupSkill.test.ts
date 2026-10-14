@@ -39,6 +39,258 @@ const expectPermissionMode = async (
   expect((await stat(path)).mode & 0o777).toBe(expected);
 };
 
+describe("canonical skill byte recovery", () => {
+  it.each([false, true])(
+    "repairs non-UTF-8 files and preserves exact snapshot bytes (stale backup: %s)",
+    async (staleBackup) => {
+      const home = await createTestTempDirectory("rea-skill-byte-repair-");
+      const manifest = join(
+        home,
+        ".agents/skills/reverse-engineer-anything/SKILL.md",
+      );
+      const original = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0xff, 0x0a]);
+      const first = `${manifest}.rea.backup`;
+      const snapshot = staleBackup
+        ? `${first}.${createHash("sha256").update(original).digest("hex")}.recovery`
+        : first;
+      await mkdir(dirname(manifest), { recursive: true });
+      await writeFile(manifest, original);
+      if (staleBackup) await writeFile(first, "older snapshot\n");
+      expect(await installCanonicalSkill(home)).toEqual({
+        ok: true,
+        value: "installed",
+      });
+      expect(await readFile(snapshot)).toEqual(original);
+      expect(await readFile(manifest)).toEqual(
+        await readFile(
+          new URL(
+            "../../../skills/reverse-engineer-anything/SKILL.md",
+            import.meta.url,
+          ),
+        ),
+      );
+      const state = await stat(snapshot);
+      expect(await installCanonicalSkill(home)).toEqual({
+        ok: true,
+        value: "unchanged",
+      });
+      await writeFile(manifest, original);
+      expect(await installCanonicalSkill(home)).toEqual({
+        ok: true,
+        value: "installed",
+      });
+      expect((await stat(snapshot)).mtimeMs).toBe(state.mtimeMs);
+      expect(await readFile(snapshot)).toEqual(original);
+      if (staleBackup)
+        expect(await readFile(first, "utf8")).toBe("older snapshot\n");
+    },
+  );
+
+  it.each([false, true])(
+    "preserves non-UTF-8 originals after publication rejects (rollback fails: %s)",
+    async (rollbackFails) => {
+      const home = await createTestTempDirectory("rea-skill-byte-rollback-");
+      const manifest = join(
+        home,
+        ".agents/skills/reverse-engineer-anything/SKILL.md",
+      );
+      const original = Buffer.from([0xff, 0xfe, 0x61, 0x00, 0xe9, 0x00]);
+      const first = `${manifest}.rea.backup`;
+      const snapshot = `${first}.${createHash("sha256").update(original).digest("hex")}.recovery`;
+      await mkdir(dirname(manifest), { recursive: true });
+      await writeFile(manifest, original, { mode: 0o640 });
+      await writeFile(first, "older snapshot\n");
+      let writes = 0;
+      const result = await installCanonicalSkill(
+        home,
+        [],
+        {},
+        process.platform,
+        {
+          mkdir: async (path) => {
+            await mkdir(path, { recursive: true });
+          },
+          backup: async (source, target) =>
+            copyFile(source, target, fsConstants.COPYFILE_EXCL),
+          write: async (path, content, mode) => {
+            writes += 1;
+            if (writes === 2 && rollbackFails)
+              throw new Error("injected rollback failure");
+            await writeFileAtomic(path, content, { encoding: "utf8", mode });
+            if (writes === 1)
+              throw new Error("injected rejection after publication");
+          },
+          remove: async (path) => rm(path, { force: true }),
+        },
+      );
+      if (result.ok) throw new Error("Expected write failure");
+      expect(result.error.stage).toBe("write");
+      expect(result.error.recoveryBackupPaths).toEqual([snapshot]);
+      expect(result.error.rollbackFailures).toHaveLength(rollbackFails ? 1 : 0);
+      expect(await readFile(snapshot)).toEqual(original);
+      expect(await readFile(first, "utf8")).toBe("older snapshot\n");
+      if (rollbackFails) expect(await readFile(manifest)).not.toEqual(original);
+      else {
+        expect(await readFile(manifest)).toEqual(original);
+        await expectPermissionMode(manifest, 0o640);
+      }
+    },
+  );
+});
+
+describe("canonical skill recovery snapshots", () => {
+  it("reports a verified current snapshot after publication and rollback fail with an older first backup", async () => {
+    const home = await createTestTempDirectory("rea-skill-current-recovery-");
+    const manifest = join(
+      home,
+      ".agents/skills/reverse-engineer-anything/SKILL.md",
+    );
+    const original = "current instructions V2\n";
+    const firstBackup = `${manifest}.rea.backup`;
+    const recovery = `${firstBackup}.${createHash("sha256").update(original).digest("hex")}.recovery`;
+    await mkdir(dirname(manifest), { recursive: true });
+    await writeFile(manifest, original);
+    await writeFile(firstBackup, "first instructions V0\n");
+    let writes = 0;
+    const result = await installCanonicalSkill(home, [], {}, process.platform, {
+      mkdir: async (path) => {
+        await mkdir(path, { recursive: true });
+      },
+      backup: async (source, target) => {
+        try {
+          await copyFile(source, target, fsConstants.COPYFILE_EXCL);
+        } catch (cause: unknown) {
+          if (
+            !(
+              cause instanceof Error &&
+              "code" in cause &&
+              cause.code === "EEXIST"
+            )
+          )
+            throw cause;
+        }
+      },
+      write: async (path, content, mode) => {
+        writes += 1;
+        if (writes === 1) {
+          await writeFileAtomic(path, content, { encoding: "utf8", mode });
+          throw new Error("injected rejection after publication");
+        }
+        throw new Error("injected rollback failure");
+      },
+      remove: async (path) => rm(path, { force: true }),
+    });
+    if (result.ok) throw new Error("Expected write failure");
+    expect(result.error.stage).toBe("write");
+    expect(result.error.rollbackFailures).toEqual([
+      { path: manifest, reason: "injected rollback failure" },
+    ]);
+    expect(result.error.recoveryBackupPaths).toEqual([recovery]);
+    expect(result.error.message).toContain(recovery);
+    expect(await readFile(recovery, "utf8")).toBe(original);
+    expect(await readFile(firstBackup, "utf8")).toBe("first instructions V0\n");
+    expect(await readFile(manifest, "utf8")).not.toBe(original);
+  });
+
+  it("keeps the first snapshot and reuses the current recovery snapshot across repair and idempotent reruns", async () => {
+    const home = await createTestTempDirectory("rea-skill-recovery-repair-");
+    const manifest = join(
+      home,
+      ".agents/skills/reverse-engineer-anything/SKILL.md",
+    );
+    const original = "current instructions V2\n";
+    const firstBackup = `${manifest}.rea.backup`;
+    const recovery = `${firstBackup}.${createHash("sha256").update(original).digest("hex")}.recovery`;
+    await mkdir(dirname(manifest), { recursive: true });
+    await writeFile(manifest, original);
+    await writeFile(firstBackup, "first instructions V0\n");
+    expect(await installCanonicalSkill(home)).toEqual({
+      ok: true,
+      value: "installed",
+    });
+    expect(await readFile(recovery, "utf8")).toBe(original);
+    const snapshotState = await stat(recovery);
+    expect(await installCanonicalSkill(home)).toEqual({
+      ok: true,
+      value: "unchanged",
+    });
+    await writeFile(manifest, original);
+    expect(await installCanonicalSkill(home)).toEqual({
+      ok: true,
+      value: "installed",
+    });
+    expect((await stat(recovery)).mtimeMs).toBe(snapshotState.mtimeMs);
+    expect(await readFile(firstBackup, "utf8")).toBe("first instructions V0\n");
+    expect(await readFile(recovery, "utf8")).toBe(original);
+  });
+
+  it.each([
+    "first-directory",
+    "recovery-directory",
+    "recovery-different-bytes",
+  ])(
+    "does not publish any skill files when the snapshot cannot be verified: %s",
+    async (occupied) => {
+      const home = await createTestTempDirectory(
+        "rea-skill-recovery-occupied-",
+      );
+      const root = join(home, ".agents/skills/reverse-engineer-anything");
+      const manifest = join(root, "SKILL.md");
+      const reference = join(root, "references/connection-and-recovery.md");
+      const original = "current instructions V2\n";
+      const firstBackup = `${reference}.rea.backup`;
+      const recovery = `${firstBackup}.${createHash("sha256").update(original).digest("hex")}.recovery`;
+      await mkdir(dirname(reference), { recursive: true });
+      await writeFile(manifest, "current manifest\n");
+      await writeFile(reference, original);
+      if (occupied === "first-directory") await mkdir(firstBackup);
+      else {
+        await writeFile(firstBackup, "first instructions V0\n");
+        if (occupied === "recovery-directory") await mkdir(recovery);
+        else await writeFile(recovery, "different bytes\n");
+      }
+      const result = await installCanonicalSkill(home);
+      if (result.ok) throw new Error("Expected backup failure");
+      expect(result.error.stage).toBe("backup");
+      expect(result.error.rollbackFailures).toEqual([]);
+      expect(result.error.recoveryBackupPaths).toEqual([]);
+      expect(await readFile(manifest, "utf8")).toBe("current manifest\n");
+      expect(await readFile(reference, "utf8")).toBe(original);
+    },
+  );
+});
+
+it("verifies copied snapshot bytes before publishing any skill file", async () => {
+  const home = await createTestTempDirectory("rea-skill-backup-readback-");
+  const manifest = join(
+    home,
+    ".agents/skills/reverse-engineer-anything/SKILL.md",
+  );
+  const original = "current instructions V2\n";
+  await mkdir(dirname(manifest), { recursive: true });
+  await writeFile(manifest, original);
+  const writes: string[] = [];
+  const result = await installCanonicalSkill(home, [], {}, process.platform, {
+    mkdir: async (path) => {
+      await mkdir(path, { recursive: true });
+    },
+    backup: async (source, target) => {
+      await copyFile(source, target, fsConstants.COPYFILE_EXCL);
+      await writeFile(target, "injected different snapshot bytes\n");
+    },
+    write: async (path, content, mode) => {
+      writes.push(path);
+      await writeFileAtomic(path, content, { encoding: "utf8", mode });
+    },
+    remove: async (path) => rm(path, { force: true }),
+  });
+  if (result.ok) throw new Error("Expected backup verification failure");
+  expect(result.error.stage).toBe("backup");
+  expect(result.error.recoveryBackupPaths).toEqual([]);
+  expect(writes).toEqual([]);
+  expect(await readFile(manifest, "utf8")).toBe(original);
+});
+
 describe("skill recovery backup selection", () => {
   it("advertises a current recovery snapshot when the first backup is historical", async () => {
     const home = await createTestTempDirectory("rea-skill-historical-backup-");
